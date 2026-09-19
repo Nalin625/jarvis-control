@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:background="#05080B">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="JARVIS CONTROL"
+        android:textColor="#4FE3FF"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.1"
+        android:layout_marginBottom="24dp" />
+
+    <TextView
+        android:id="@+id/ipLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="This phone's IP: ..."
+        android:textColor="#DCEEF2"
+        android:textSize="14sp"
+        android:layout_marginBottom="20dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Token (enter this same value on your laptop's /mobile page):"
+        android:textColor="#6F8B93"
+        android:textSize="12sp" />
+
+    <EditText
+        android:id="@+id/tokenField"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#DCEEF2"
+        android:backgroundTint="#173039"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/saveTokenButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Save Token"
+        android:layout_marginBottom="24dp" />
+
+    <Button
+        android:id="@+id/startButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Start Server"
+        android:backgroundTint="#4FE3FF"
+        android:textColor="#04141A"
+        android:layout_marginBottom="8dp" />
+
+    <Button
+        android:id="@+id/stopButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Stop Server"
+        android:layout_marginBottom="24dp" />
+
+    <TextView
+        android:id="@+id/statusLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Not started."
+        android:textColor="#6F8B93"
+        android:textSize="13sp" />
+
+</LinearLayout>

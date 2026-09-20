@@ -128,8 +128,28 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
                 ?: return json(JSONObject().put("error", "No app found for '$target' (expected a URL or an exact package name)"))
         }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
-        return json(JSONObject().put("ok", true))
+
+        // Android 10+ blocks apps from launching a new screen directly from a
+        // background service — that's a real platform security restriction,
+        // not a bug. The standard, correct workaround is a tap-to-open
+        // notification: launching from a notification tap always counts as
+        // a real user action, so it's allowed.
+        val pendingIntent = android.app.PendingIntent.getActivity(
+            context, target.hashCode(), intent,
+            android.app.PendingIntent.FLAG_ONE_SHOT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notification = NotificationCompat.Builder(context, JarvisService.NOTIFY_CHANNEL_ID)
+            .setContentTitle("Jarvis wants to open something")
+            .setContentText("Tap to open: $target")
+            .setSmallIcon(android.R.drawable.ic_menu_view)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        manager.notify(System.currentTimeMillis().toInt(), notification)
+
+        return json(JSONObject().put("ok", true).put("note", "Posted as a tap-to-open notification (Android blocks direct background launches)."))
     }
 
     private fun handleVolume(session: IHTTPSession): Response {

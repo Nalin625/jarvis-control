@@ -63,7 +63,7 @@ class MicService : Service() {
             instance?.requestOnce()
         }
 
-        fun setPaused(p: Boolean) {
+        fun pauseMic(p: Boolean) {
             paused = p
             instance?.refresh()
         }

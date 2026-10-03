@@ -16,7 +16,7 @@ object StartupVoice {
 
     fun start(ctx: Context): Boolean {
         if (recording || !MicService.hasPermission(ctx)) return false
-        MicService.setPaused(true)          // the wake-word listener must let go of the mic
+        MicService.pauseMic(true)          // the wake-word listener must let go of the mic
         synchronized(pcm) { pcm.reset() }
         recording = true
         thread = Thread {
@@ -52,7 +52,7 @@ object StartupVoice {
         val app = ctx.applicationContext
         Thread {
             try { thread?.join(2000) } catch (e: Exception) {}
-            MicService.setPaused(false)
+            MicService.pauseMic(false)
             val data = synchronized(pcm) { pcm.toByteArray() }
             if (data.size < 16000) {
                 done("Too short - hold the mic closer and speak for a few seconds.")

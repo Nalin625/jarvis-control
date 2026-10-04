@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- CYAN theme (default). values-night/colors.xml holds the BLACK theme. -->
+    <color name="bg_root">#05080B</color>
+    <color name="bg_root2">#071620</color>
+    <color name="bg_card">#0C171D</color>
+    <color name="bg_input">#0F1F26</color>
+    <color name="accent">#4FE3FF</color>
+    <color name="accent_dim">#173039</color>
+    <color name="text_primary">#DCEEF2</color>
+    <color name="text_dim">#6F8B93</color>
+    <color name="text_faint">#3D5157</color>
+    <color name="success">#3DDC84</color>
+    <color name="warning">#FF7A5C</color>
+    <color name="neon_blue">#2E7BFF</color>
+    <color name="neon_violet">#8A5CFF</color>
+    <color name="danger">#FF4D6A</color>
+    <color name="glass">#0A141B</color>
+    <color name="edge">#1E4452</color>
+    <color name="tile_a">#0E1D27</color>
+    <color name="tile_b">#081219</color>
+    <color name="scan">#2A4FE3FF</color>
+    <color name="press_a">#2FB4CF</color>
+    <color name="press_b">#2362C9</color>
+    <color name="nav_bg">#E6060D12</color>
+    <color name="on_accent">#04121A</color>
+    <color name="line_a">#664FE3FF</color>
+    <color name="line_b">#1A4FE3FF</color>
+    <color name="line_c">#004FE3FF</color>
+</resources>

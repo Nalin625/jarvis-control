@@ -40,6 +40,7 @@ class MainActivity : AppCompatActivity() {
     private var deckResponse: android.widget.TextView? = null
     private var homeGrid: android.widget.LinearLayout? = null
     private var deckGrid: android.widget.LinearLayout? = null
+    private var historyRow: android.widget.LinearLayout? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -242,8 +243,10 @@ class MainActivity : AppCompatActivity() {
 
         // ---- pages: Home / Deck / Link / Core / Setup ----
         buildHome()
+        buildStatusStrip()
         buildDeck()
         buildThemeCard()
+        buildRemoteCard()
         binding.navBar.onSelect = { showPage(it) }
         pageIndex = savedInstanceState?.getInt("page") ?: 0
         showPage(pageIndex, false)
@@ -327,6 +330,8 @@ class MainActivity : AppCompatActivity() {
             Tile("\uD83D\uDD14", "Notif access") { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
             Tile("\uD83D\uDD17", "Pair") { showPage(2) },
             Tile("\uD83D\uDDC2", "Laptop deck") { showPage(1) },
+            Tile("\uD83D\uDCCB", "Paste to laptop") { pasteToLaptop() },
+            Tile("\uD83D\uDCCA", "Laptop status") { showPage(1); sendDeck("status report") },
             Tile("\uD83C\uDFA8", "Theme") { toggleTheme() },
             Tile("\u2699", "Setup") { showPage(4) }
         )
@@ -352,7 +357,14 @@ class MainActivity : AppCompatActivity() {
             Tile("\uD83D\uDCF0", "News") { sendDeck("news") },
             Tile("\u26C5", "Weather") { sendDeck("weather") },
             Tile("\uD83E\uDE7A", "Diagnose") { sendDeck("run diagnostics") },
-            Tile("\uD83D\uDCA4", "Sleep") { confirmDeck("Put the laptop to sleep?", "sleep") }
+            Tile("\uD83D\uDCA4", "Sleep") { sendDeck("sleep") },
+            Tile("\uD83D\uDCCA", "Status") { sendDeck("status report") },
+            Tile("\uD83D\uDEB6", "Away mode") { sendDeck("away mode") },
+            Tile("\u2615", "Stay awake") { sendDeck("stay awake on") },
+            Tile("\u23F2", "Off in...") { pickShutdownTimer() },
+            Tile("\u274C", "Cancel timer") { sendDeck("cancel shutdown") },
+            Tile("\uD83D\uDD04", "Restart") { sendDeck("restart") },
+            Tile("\u23FB", "Shut down") { sendDeck("shutdown") }
         )
         val g = Fx.grid(this, tiles, 4, 74f)
         deckGrid = g
@@ -416,14 +428,146 @@ class MainActivity : AppCompatActivity() {
         card.addView(resp)
         deckResponse = resp
         col.addView(card)
+
+        val hs = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dpf(10f).toInt() }
+        }
+        val hr = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
+        hs.addView(hr)
+        historyRow = hr
+        col.addView(hs)
+        refreshHistory()
     }
 
-    private fun confirmDeck(msg: String, cmd: String) {
+    /** Feature 1: choose when the laptop should shut down (15 min / 30 min / 1 h / 2 h). */
+    private fun pickShutdownTimer() {
+        val labels = arrayOf("In 15 minutes", "In 30 minutes", "In 1 hour", "In 2 hours")
+        val cmds = arrayOf("shutdown in 15 minutes", "shutdown in 30 minutes", "shutdown in 1 hour", "shutdown in 2 hours")
         AlertDialog.Builder(this)
-            .setMessage(msg)
-            .setPositiveButton("Yes") { _, _ -> sendDeck(cmd) }
+            .setTitle("Shut the laptop down...")
+            .setItems(labels) { _, i -> sendDeck(cmds[i]) }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    /** Feature 4: while the Deck page is open, the phone's volume keys change the LAPTOP volume. */
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (pageIndex == 1 && (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP || keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN)) {
+            sendDeck(if (keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP) "volume up" else "volume down")
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    /** Feature 5: send whatever is on this phone's clipboard to the laptop's clipboard. */
+    private fun pasteToLaptop() {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val text = cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
+        if (text.isBlank()) {
+            Toast.makeText(this, "Your clipboard is empty", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Thread {
+            val r = LaptopApi.call(this, "POST", "/clipboard", JSONObject().put("text", text), 8000)
+            val ok = r.optBoolean("ok", false)
+            runOnUiThread {
+                Toast.makeText(this, if (ok) "Sent to the laptop clipboard" else r.optString("error", "Couldn't send"), Toast.LENGTH_SHORT).show()
+            }
+        }.start()
+    }
+
+    /** Feature 3: a live strip on Home with the laptop's battery, load and IPs (refreshes every 30 s). */
+    private var statusStrip: android.widget.TextView? = null
+    private var statusTicks = 0
+
+    private fun buildStatusStrip() {
+        val tv = android.widget.TextView(this).apply {
+            text = "LAPTOP  //  waiting for the link..."
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_dim))
+            typeface = android.graphics.Typeface.MONOSPACE
+            textSize = 10.5f
+            setBackgroundResource(R.drawable.bg_chip)
+            val p = dpf(10f).toInt()
+            setPadding(p, p, p, p)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dpf(10f).toInt() }
+        }
+        statusStrip = tv
+        binding.homeColumn.addView(tv, 1)   // right under the header
+    }
+
+    private fun refreshStatusStrip() {
+        val tv = statusStrip ?: return
+        if (!laptopOnline || pageIndex != 0) return
+        Thread {
+            val r = LaptopApi.call(this, "POST", "/command", JSONObject().put("command", "status report"), 6000)
+            val txt = r.optString("response", "").removePrefix("[local] ").trim()
+            if (txt.isNotEmpty()) runOnUiThread { tv.text = txt.replace("  |  ", "  \u00B7  ") }
+        }.start()
+    }
+
+    private fun deckHistory(): List<String> {
+        val raw = prefs.getString("deck_history", "[]") ?: "[]"
+        return try {
+            val arr = org.json.JSONArray(raw)
+            (0 until arr.length()).map { arr.getString(it) }
+        } catch (e: Exception) { emptyList() }
+    }
+
+    private fun pushHistory(cmd: String) {
+        val list = (listOf(cmd) + deckHistory().filter { it != cmd }).take(8)
+        val arr = org.json.JSONArray()
+        list.forEach { arr.put(it) }
+        prefs.edit().putString("deck_history", arr.toString()).apply()
+        refreshHistory()
+    }
+
+    private fun pinned(): Set<String> {
+        val raw = prefs.getString("deck_pins", "[]") ?: "[]"
+        return try {
+            val arr = org.json.JSONArray(raw)
+            (0 until arr.length()).map { arr.getString(it) }.toSet()
+        } catch (e: Exception) { emptySet() }
+    }
+
+    private fun togglePin(cmd: String) {
+        val set = pinned().toMutableSet()
+        if (!set.add(cmd)) set.remove(cmd)
+        val arr = org.json.JSONArray()
+        set.forEach { arr.put(it) }
+        prefs.edit().putString("deck_pins", arr.toString()).apply()
+        refreshHistory()
+        Toast.makeText(this, if (cmd in set) "Pinned: $cmd" else "Unpinned", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Feature 2: chips with pinned (long-press, shown first with a star) and recent commands; tap to run. */
+    private fun refreshHistory() {
+        val row = historyRow ?: return
+        row.removeAllViews()
+        val pins = pinned()
+        val all = pins.toList() + deckHistory().filter { it !in pins }
+        for (c in all) {
+            row.addView(android.widget.TextView(this).apply {
+                text = if (c in pins) "\u2605 $c" else c
+                textSize = 11f
+                typeface = android.graphics.Typeface.MONOSPACE
+                setTextColor(ContextCompat.getColor(this@MainActivity, if (c in pins) R.color.accent else R.color.text_dim))
+                setBackgroundResource(R.drawable.bg_chip)
+                val ph = dpf(12f).toInt(); val pv = dpf(7f).toInt()
+                setPadding(ph, pv, ph, pv)
+                isClickable = true
+                setOnClickListener { sendDeck(c) }
+                setOnLongClickListener { togglePin(c); true }
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dpf(6f).toInt() }
+                Fx.press(this)
+            })
+        }
     }
 
     private fun sendDeck(cmd: String) {
@@ -431,12 +575,27 @@ class MainActivity : AppCompatActivity() {
         out.setTextColor(ContextCompat.getColor(this, R.color.accent))
         out.text = "> $cmd\n..."
         Thread {
-            val r = LaptopApi.call(this, "POST", "/command", JSONObject().put("command", cmd), 20000)
+            val t0 = System.nanoTime()
+            var r = LaptopApi.call(this, "POST", "/command", JSONObject().put("command", cmd), 20000)
+            if (r.optString("error", "").startsWith("Can't reach")) {
+                // one automatic retry (phones often wake the radio on the first try)
+                Thread.sleep(700)
+                r = LaptopApi.call(this, "POST", "/command", JSONObject().put("command", cmd), 20000)
+            }
+            val ms = (System.nanoTime() - t0) / 1_000_000
             val err = r.optString("error", "")
-            val text = if (err.isNotEmpty()) err else r.optString("response", "Done")
+            val hasRemote = !(prefs.getString("laptop_ip_remote", "") ?: "").isEmpty()
+            val tip = if (err.startsWith("Can't reach") && !hasRemote)
+                "\nAway from home? Install Tailscale on both devices (Setup > FAR AWAY)." else ""
+            val text = if (err.isNotEmpty()) err + tip else r.optString("response", "Done")
             runOnUiThread {
                 out.setTextColor(ContextCompat.getColor(this, if (err.isNotEmpty()) R.color.warning else R.color.text_primary))
-                out.text = "> $cmd\n$text"
+                out.text = "> $cmd\n$text" + if (err.isEmpty()) "\n\u2014 ${ms} ms" else ""
+                out.performHapticFeedback(
+                    if (err.isEmpty()) android.view.HapticFeedbackConstants.VIRTUAL_KEY
+                    else android.view.HapticFeedbackConstants.LONG_PRESS
+                )
+                if (err.isEmpty()) pushHistory(cmd)
             }
         }.start()
     }
@@ -448,6 +607,59 @@ class MainActivity : AppCompatActivity() {
         AppCompatDelegate.setDefaultNightMode(
             if (black) AppCompatDelegate.MODE_NIGHT_YES else AppCompatDelegate.MODE_NIGHT_NO
         )  // recreates the activity with the other colour set; the current page is restored
+    }
+
+    /** Setup page: the laptop's internet (Tailscale) address, used when the home-WiFi address doesn't answer. */
+    private fun buildRemoteCard() {
+        val card = HudCard(this).apply {
+            val pd = dpf(14f).toInt()
+            setPadding(pd, pd, pd, pd)
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dpf(12f).toInt() }
+        }
+        card.addView(android.widget.TextView(this).apply {
+            text = "FAR AWAY  //  INTERNET LINK"
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
+            textSize = 12f
+        })
+        card.addView(android.widget.TextView(this).apply {
+            text = "Install Tailscale on this phone and the laptop, then the laptop's 100.x address appears here by itself after pairing. At home the WiFi address is used; anywhere else this one."
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_dim))
+            textSize = 11f
+            setPadding(0, dpf(6f).toInt(), 0, dpf(8f).toInt())
+        })
+        val f = android.widget.EditText(this).apply {
+            hint = "laptop internet IP (100.x.x.x)"
+            setHintTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_faint))
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            setBackgroundResource(R.drawable.bg_input)
+            typeface = android.graphics.Typeface.MONOSPACE
+            textSize = 13f
+            isSingleLine = true
+            val p = dpf(12f).toInt()
+            setPadding(p, p, p, p)
+            setText(prefs.getString("laptop_ip_remote", ""))
+        }
+        card.addView(f)
+        card.addView(android.widget.Button(this).apply {
+            text = "SAVE INTERNET IP"
+            isAllCaps = false
+            textSize = 13f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.on_accent))
+            setBackgroundResource(R.drawable.btn_primary)
+            backgroundTintList = null
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dpf(8f).toInt() }
+            setOnClickListener {
+                prefs.edit().putString("laptop_ip_remote", f.text.toString().trim()).apply()
+                Toast.makeText(this@MainActivity, "Saved", Toast.LENGTH_SHORT).show()
+                checkLaptopHealth()
+            }
+        })
+        binding.setupColumn.addView(card, 2)
     }
 
     private fun buildThemeCard() {
@@ -486,6 +698,7 @@ class MainActivity : AppCompatActivity() {
     private val healthTick = object : Runnable {
         override fun run() {
             checkLaptopHealth()
+            if (statusTicks++ % 6 == 0) refreshStatusStrip()
             healthHandler.postDelayed(this, 5000)
         }
     }
@@ -564,9 +777,10 @@ class MainActivity : AppCompatActivity() {
         val port = prefs.getString("laptop_port", "8899") ?: "8899"
         Thread {
             var ms = -1L
+            val hostIp = LaptopApi.host(this).ifEmpty { ip }
             try {
                 val t0 = System.nanoTime()
-                val c = URL("http://$ip:$port/hello").openConnection() as HttpURLConnection
+                val c = URL("http://$hostIp:$port/hello").openConnection() as HttpURLConnection
                 c.connectTimeout = 2500
                 c.readTimeout = 2500
                 if (c.responseCode == 200) ms = (System.nanoTime() - t0) / 1_000_000
@@ -577,10 +791,12 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 if (isFinishing) return@runOnUiThread
                 laptopOnline = ms >= 0
-                binding.statLaptop.text = ip
+                binding.statLaptop.text = hostIp
                 binding.statLatency.text = if (ms >= 0) "$ms ms" else "\u2014"
-                if (ms >= 0) setStatus(binding.healthLabel, "Connected to $ip  \u00B7  $ms ms", R.color.success)
-                else setStatus(binding.healthLabel, "Laptop $ip not reachable (same WiFi? laptop on?)", R.color.warning)
+                val remoteIp = prefs.getString("laptop_ip_remote", "") ?: ""
+                val via = if (remoteIp.isNotEmpty() && hostIp == remoteIp && hostIp != ip) "  \u00B7  via INTERNET" else "  \u00B7  via WiFi"
+                if (ms >= 0) setStatus(binding.healthLabel, "Connected to $hostIp  \u00B7  $ms ms$via", R.color.success)
+                else setStatus(binding.healthLabel, "Laptop $hostIp not reachable (laptop on? Tailscale on?)", R.color.warning)
                 refreshHero()
             }
         }.start()
@@ -658,6 +874,7 @@ class MainActivity : AppCompatActivity() {
         val deadline = System.currentTimeMillis() + 65_000
         var state = "pending"
         var lanToken = ""
+        var tsIp = ""
         while (System.currentTimeMillis() < deadline && state == "pending") {
             try {
                 Thread.sleep(1000)
@@ -667,7 +884,7 @@ class MainActivity : AppCompatActivity() {
                 val stream = if (c.responseCode in 200..299) c.inputStream else c.errorStream
                 val reply = JSONObject(stream.bufferedReader().readText())
                 state = reply.optString("state", "pending")
-                if (state == "approved") lanToken = reply.optString("lan_token")
+                if (state == "approved") { lanToken = reply.optString("lan_token"); tsIp = reply.optString("ts_ip") }
                 c.disconnect()
             } catch (e: Exception) {
                 // transient network hiccup: keep polling until the deadline
@@ -684,6 +901,7 @@ class MainActivity : AppCompatActivity() {
                         .putString("laptop_token", lanToken)
                         .putBoolean("notif_forward_enabled", true)
                         .apply()
+                    if (tsIp.isNotEmpty()) prefs.edit().putString("laptop_ip_remote", tsIp).apply()
                     binding.laptopIpField.setText(laptop.ip)
                     binding.laptopPortField.setText(laptop.port.toString())
                     binding.laptopTokenField.setText(lanToken)
@@ -722,7 +940,7 @@ class MainActivity : AppCompatActivity() {
             }.start()
         }
         prefs.edit()
-            .remove("laptop_ip").remove("laptop_token")
+            .remove("laptop_ip").remove("laptop_ip_remote").remove("laptop_token")
             .putBoolean("notif_forward_enabled", false)
             .apply()
         binding.laptopIpField.setText("")
@@ -759,6 +977,7 @@ class MainActivity : AppCompatActivity() {
         Thread {
             var error: String? = null
             var lanToken = ""
+            var tsIp = ""
             try {
                 val conn = URL("http://$ip:$port/pair").openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
@@ -773,7 +992,7 @@ class MainActivity : AppCompatActivity() {
                 conn.outputStream.use { it.write(body.toString().toByteArray()) }
                 val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
                 val reply = JSONObject(stream.bufferedReader().readText())
-                if (reply.optBoolean("ok")) lanToken = reply.optString("lan_token") else error = reply.optString("error", "pairing failed")
+                if (reply.optBoolean("ok")) { lanToken = reply.optString("lan_token"); tsIp = reply.optString("ts_ip") } else error = reply.optString("error", "pairing failed")
                 conn.disconnect()
             } catch (e: Exception) {
                 error = "Can't reach the laptop at $ip (same WiFi? Jarvis server running?)"
@@ -788,6 +1007,7 @@ class MainActivity : AppCompatActivity() {
                         .putString("laptop_token", lanToken)
                         .putBoolean("notif_forward_enabled", true)
                         .apply()
+                    if (tsIp.isNotEmpty()) prefs.edit().putString("laptop_ip_remote", tsIp).apply()
                     binding.laptopIpField.setText(ip)
                     binding.laptopPortField.setText(port)
                     binding.laptopTokenField.setText(lanToken)

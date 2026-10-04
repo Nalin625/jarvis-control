@@ -59,7 +59,7 @@ class JarvisNotificationListener : NotificationListenerService() {
             .put("ts", sbn.postTime / 1000.0)
             .put("key", sbn.key)
 
-        Thread { sendOrQueue(payload, ip, port, token) }.start()
+        Thread { sendOrQueue(payload, LaptopApi.host(applicationContext).ifEmpty { ip }, port, token) }.start()
     }
 
     // ---- never lose a notification: if the laptop is asleep/unreachable, keep it on the

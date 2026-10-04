@@ -32,8 +32,9 @@ class ShareReceiverActivity : Activity() {
         if (ip.isEmpty()) { toast("Set the laptop IP in Jarvis Control first"); finish(); return }
 
         Thread {
+            val hostIp = LaptopApi.host(applicationContext).ifEmpty { ip }
             val ok = try {
-                val conn = URL("http://$ip:$port/clipboard").openConnection() as HttpURLConnection
+                val conn = URL("http://$hostIp:$port/clipboard").openConnection() as HttpURLConnection
                 conn.requestMethod = "POST"
                 conn.doOutput = true
                 conn.connectTimeout = 4000

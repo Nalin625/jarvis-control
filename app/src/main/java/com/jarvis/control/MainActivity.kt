@@ -233,6 +233,95 @@ class MainActivity : AppCompatActivity() {
         remoteParent.addView(voiceCard, remoteParent.indexOfChild(binding.openRemoteButton) + 1)
         if (MicService.hasPermission(this) && !MicService.alive) MicService.start(this)
 
+        // ---- Call assistant: Jarvis answers calls, talks to the caller, summary goes to the laptop ----
+        val callStatus = android.widget.TextView(this).apply {
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_dim))
+            textSize = 12f
+            typeface = android.graphics.Typeface.MONOSPACE
+        }
+        fun callModeLabel(): String = when (CallAssistService.mode(this)) {
+            "ask" -> "ASK ME for each call"
+            "auto" -> "AUTO after " + prefs.getInt("call_delay", 15) + " s"
+            else -> "OFF"
+        }
+        lateinit var callModeBtn: android.widget.Button
+        lateinit var callDelayBtn: android.widget.Button
+        callModeBtn = voiceButton("CALL ASSISTANT: " + callModeLabel()) {
+            if (!CallAssistService.hasCorePerms(this)) {
+                permissionLauncher.launch(CallAssistService.PERMS)
+                callStatus.text = "Allow phone, microphone and contacts, then tap again."
+            } else {
+                val next = when (CallAssistService.mode(this)) { "off" -> "ask"; "ask" -> "auto"; else -> "off" }
+                val ok = CallAssistService.setMode(this, next)
+                callModeBtn.text = "CALL ASSISTANT: " + callModeLabel()
+                callStatus.text = if (!ok) "Could not start. Allow the permissions." else when (next) {
+                    "ask" -> "Each call shows buttons: Jarvis answers / I'll answer."
+                    "auto" -> "Jarvis answers by itself after the delay. Tap I'll answer on the alert to take it yourself."
+                    else -> "Call assistant is off."
+                }
+            }
+        }
+        callDelayBtn = voiceButton("AUTO-ANSWER DELAY: " + prefs.getInt("call_delay", 15) + " s") {
+            val cur = prefs.getInt("call_delay", 15)
+            val nxt = if (cur <= 8) 15 else if (cur <= 15) 25 else 8
+            prefs.edit().putInt("call_delay", nxt).apply()
+            callDelayBtn.text = "AUTO-ANSWER DELAY: $nxt s"
+            callModeBtn.text = "CALL ASSISTANT: " + callModeLabel()
+        }
+        val callTestBtn = voiceButton("TEST CALL ASSISTANT (no real call)") {
+            if (!CallAssistService.hasCorePerms(this)) {
+                permissionLauncher.launch(CallAssistService.PERMS)
+            } else {
+                if (!CallAssistService.alive) CallAssistService.start(this)
+                callStatus.text = "Test: speak to the phone like a caller. Say goodbye to finish."
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    if (!CallAssistService.test()) callStatus.text = "Turn the call assistant on first (ASK or AUTO)."
+                }, 1200)
+            }
+        }
+        fun keyLabel(): String {
+            val k = prefs.getString("call_gemini_key", "").orEmpty()
+            return if (k.isEmpty()) "PASTE GEMINI KEY (copy it first)" else "GEMINI KEY SAVED ...${k.takeLast(4)} (hold to remove)"
+        }
+        lateinit var callKeyBtn: android.widget.Button
+        callKeyBtn = voiceButton(keyLabel()) {
+            val clip = (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).primaryClip
+            val txt = clip?.getItemAt(0)?.text?.toString()?.trim().orEmpty()
+            if (txt.startsWith("AIza") && txt.length > 30 && !txt.contains(" ")) {
+                prefs.edit().putString("call_gemini_key", txt).apply()
+                callKeyBtn.text = keyLabel()
+                callStatus.text = "Gemini key saved. Calls use Gemini first, the phone AI is the backup."
+            } else {
+                callStatus.text = "Copy your Gemini API key first (starts with AIza), then tap this again."
+            }
+        }
+        callKeyBtn.setOnLongClickListener {
+            prefs.edit().remove("call_gemini_key").apply()
+            callKeyBtn.text = keyLabel()
+            callStatus.text = "Gemini key removed. Calls use the phone AI."
+            true
+        }
+        val callLogBtn = voiceButton("SHOW LAST CALL SUMMARIES") {
+            callStatus.text = "Reading..."
+            Thread { val t = CallBrain.recent(this, 3); runOnUiThread { callStatus.text = t } }.start()
+        }
+        callStatus.text = "Put the phone face-up in a quiet place. The speaker is used so the caller can hear Jarvis."
+        val callCard = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = (10 * resources.displayMetrics.density).toInt() }
+            addView(callModeBtn)
+            addView(callDelayBtn)
+            addView(callKeyBtn)
+            addView(callTestBtn)
+            addView(callLogBtn)
+            addView(callStatus)
+        }
+        remoteParent.addView(callCard, remoteParent.indexOfChild(voiceCard) + 1)
+        if (CallAssistService.mode(this) != "off" && CallAssistService.hasCorePerms(this) && !CallAssistService.alive) CallAssistService.start(this)
+
         binding.bootStartCheck.isChecked = prefs.getBoolean("start_on_boot", false)
         binding.bootStartCheck.setOnCheckedChangeListener { _, checked ->
             prefs.edit().putBoolean("start_on_boot", checked).apply()

@@ -57,6 +57,9 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
                 "/mic/start" -> handleMicStart()
                 "/mic/stop" -> handleMicStop()
                 "/mic/once" -> handleMicOnce()
+                "/call/answer" -> handleCallAnswer()
+                "/call/mode" -> handleCallMode(session)
+                "/call/test" -> handleCallTest()
                 "/find" -> handleFind(session)
                 "/speak" -> handleSpeak(session)
                 "/media" -> handleMedia(session)
@@ -157,6 +160,22 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
         MicService.listenOnce(context.applicationContext)
         return json(JSONObject().put("ok", true))
     }
+
+    private fun handleCallAnswer(): Response =
+        if (CallAssistService.answerNow()) json(JSONObject().put("ok", true).put("message", "Jarvis is answering the call."))
+        else json(JSONObject().put("error", "No call is ringing, or the call assistant is off."))
+
+    private fun handleCallMode(session: IHTTPSession): Response {
+        val m = readBody(session).optString("mode", "").lowercase()
+        if (m != "ask" && m != "auto" && m != "off") return json(JSONObject().put("error", "mode must be ask, auto or off"))
+        val ok = CallAssistService.setMode(context.applicationContext, m)
+        return if (ok) json(JSONObject().put("ok", true).put("message", "Call assistant: $m"))
+        else json(JSONObject().put("error", "Open the Jarvis Control app and allow the phone permissions first, then try again."))
+    }
+
+    private fun handleCallTest(): Response =
+        if (CallAssistService.test()) json(JSONObject().put("ok", true).put("message", "Test call started. Talk to the phone."))
+        else json(JSONObject().put("error", "Call assistant is off. Turn it on in the phone app first."))
 
     private fun handleAiStart(): Response {
         val p = context.getSharedPreferences("jarvis_control", Context.MODE_PRIVATE)

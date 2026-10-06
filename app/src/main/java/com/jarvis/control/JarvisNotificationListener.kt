@@ -25,7 +25,10 @@ class JarvisNotificationListener : NotificationListenerService() {
 
     private fun prefs(): SharedPreferences = getSharedPreferences("jarvis_control", MODE_PRIVATE)
 
+    private fun isWhatsApp(pkg: String) = pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b"
+
     override fun onNotificationPosted(sbn: StatusBarNotification) {
+        if (isWhatsApp(sbn.packageName)) CallAssistService.waPosted(sbn)
         val p = prefs()
         if (!p.getBoolean("notif_forward_enabled", false)) return
 
@@ -105,6 +108,7 @@ class JarvisNotificationListener : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        if (isWhatsApp(sbn.packageName)) CallAssistService.waRemoved(sbn.key)
         // intentionally not mirrored: dismissing a notification on the phone must NOT remove it
         // from Jarvis. The laptop keeps its own permanent archive.
     }

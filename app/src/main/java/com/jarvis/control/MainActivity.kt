@@ -36,6 +36,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var prefs: SharedPreferences
     private var serviceRunning = false
     private var pageIndex = 0
+    private var callCardView: android.view.View? = null
     private var scanAnim: ValueAnimator? = null
     private var deckResponse: android.widget.TextView? = null
     private var homeGrid: android.widget.LinearLayout? = null
@@ -312,6 +313,13 @@ class MainActivity : AppCompatActivity() {
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                 android.view.ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = (10 * resources.displayMetrics.density).toInt() }
+            addView(android.widget.TextView(this@MainActivity).apply {
+                text = "\uD83D\uDCDE CALL ASSISTANT"
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+                textSize = 15f
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
+                setPadding(0, 0, 0, (8 * resources.displayMetrics.density).toInt())
+            })
             addView(callModeBtn)
             addView(callDelayBtn)
             addView(callKeyBtn)
@@ -320,6 +328,7 @@ class MainActivity : AppCompatActivity() {
             addView(callStatus)
         }
         remoteParent.addView(callCard, remoteParent.indexOfChild(voiceCard) + 1)
+        callCardView = callCard
         if (CallAssistService.mode(this) != "off" && CallAssistService.hasCorePerms(this) && !CallAssistService.alive) CallAssistService.start(this)
 
         binding.bootStartCheck.isChecked = prefs.getBoolean("start_on_boot", false)
@@ -417,6 +426,12 @@ class MainActivity : AppCompatActivity() {
             Tile("\uD83D\uDCFA", "Share screen") { binding.shareScreenButton.performClick() },
             Tile("\uD83C\uDF99", "Mic access") { micPermLauncher.launch(Manifest.permission.RECORD_AUDIO) },
             Tile("\uD83D\uDD14", "Notif access") { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
+            Tile("\uD83D\uDCDE", "Calls") {
+                showPage(2)
+                callCardView?.let { c ->
+                    binding.pageLink.postDelayed({ c.requestRectangleOnScreen(android.graphics.Rect(0, 0, c.width, c.height), false) }, 400)
+                }
+            },
             Tile("\uD83D\uDD17", "Pair") { showPage(2) },
             Tile("\uD83D\uDDC2", "Laptop deck") { showPage(1) },
             Tile("\uD83D\uDCCB", "Paste to laptop") { pasteToLaptop() },

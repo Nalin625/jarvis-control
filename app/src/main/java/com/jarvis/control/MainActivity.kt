@@ -1233,6 +1233,8 @@ class MainActivity : AppCompatActivity() {
         updateNotifAccessLabel()
         updateScreenUi()
         FindPhone.stop(this)  // opening the app silences "find my phone"
+        // catch up on phone-start events the laptop has not confirmed yet
+        Thread { PhoneStartReporter.flush(applicationContext) }.start()
         if (JarvisService.running && !serviceRunning) {
             // started from the Quick Settings tile or at boot
             serviceRunning = true

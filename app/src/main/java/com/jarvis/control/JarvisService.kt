@@ -56,6 +56,9 @@ class JarvisService : Service() {
 
         running = true
         JarvisTileService.refresh(this)
+
+        // send any phone-start events the laptop has not confirmed yet (e.g. it was off at boot)
+        Thread { PhoneStartReporter.deliver(applicationContext, 10, 30_000L) }.start()
         return START_STICKY
     }
 

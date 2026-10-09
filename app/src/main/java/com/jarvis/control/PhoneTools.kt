@@ -108,7 +108,7 @@ object PhoneTools {
         launch(ctx, Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) ?: "Opened Bluetooth settings."
 
     fun openDnd(ctx: Context): String =
-        launch(ctx, Intent(Settings.ACTION_NOTIFICATION_POLICY_SETTINGS)) ?: "Opened Do Not Disturb settings."
+        launch(ctx, Intent("android.settings.NOTIFICATION_POLICY_ACCESS_SETTINGS")) ?: "Opened Do Not Disturb settings."
 
     fun openCamera(ctx: Context): String =
         launch(ctx, Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)) ?: "Opened the camera."

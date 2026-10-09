@@ -320,7 +320,7 @@ object PhoneTools2 {
     /** Whether Jarvis can read notifications, and whether it is mirroring them to the laptop. */
     fun notifStatus(ctx: Context): String {
         val access = try {
-            Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_NOTIFICATION_LISTENERS)
+            Settings.Secure.getString(ctx.contentResolver, "enabled_notification_listeners")
                 .orEmpty().contains(ctx.packageName)
         } catch (e: Exception) {
             false

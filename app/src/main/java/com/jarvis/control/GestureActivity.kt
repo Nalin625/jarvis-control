@@ -24,6 +24,7 @@ class GestureActivity : AppCompatActivity() {
     private lateinit var testBtn: Button
     private lateinit var cameraSwitch: Switch
     private lateinit var sendSwitch: Switch
+    private lateinit var pointerSwitch: Switch
     private var recording: String? = null
     private var recordLeft = 0
     private var testing = false
@@ -69,6 +70,16 @@ class GestureActivity : AppCompatActivity() {
             }
         }
         col.addView(sendSwitch)
+
+        pointerSwitch = Switch(this).apply {
+            text = "Move the laptop mouse with my index finger (pinch = click)"
+            isChecked = prefs.getBoolean("gesture_pointer", false)
+            setOnCheckedChangeListener { _, on ->
+                prefs.edit().putBoolean("gesture_pointer", on).apply()
+                GestureService.pointerMode = on
+            }
+        }
+        col.addView(pointerSwitch)
 
         col.addView(line("1. Type a gesture name, e.g. pinch.\n2. Press Record and hold the sign still.\n3. Press Test to check it."))
         nameBox = EditText(this).apply {

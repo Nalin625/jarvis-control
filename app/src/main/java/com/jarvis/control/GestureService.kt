@@ -44,6 +44,8 @@ class GestureService : LifecycleService() {
 
         @Volatile var running = false
         @Volatile var sendToLaptop = false
+        /** Pointer mode: the index finger moves the laptop mouse, a pinch presses it. */
+        @Volatile var pointerMode = false
 
         /** Set by the trainer screen to get each frame's hand (null = no hand). Called on the main thread. */
         @Volatile var onHand: ((List<FloatArray>?) -> Unit)? = null
@@ -65,6 +67,11 @@ class GestureService : LifecycleService() {
     private var streak = 0
     private var lastSent = 0L
     private var lastTs = 0L
+    private val trackExec = Executors.newSingleThreadExecutor()
+    private val trackBusy = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var lastScore = 0f
+    private var lastTrackSent = 0L
+    private var pinching = false
 
     override fun onCreate() {
         super.onCreate()
@@ -80,7 +87,9 @@ class GestureService : LifecycleService() {
             startForeground(NOTIF_ID, notice)
         }
         if (running) return START_STICKY
-        sendToLaptop = getSharedPreferences("jarvis_control", MODE_PRIVATE).getBoolean("gesture_send", false)
+        val prefs = getSharedPreferences("jarvis_control", MODE_PRIVATE)
+        sendToLaptop = prefs.getBoolean("gesture_send", false)
+        pointerMode = prefs.getBoolean("gesture_pointer", false)
         analysisExecutor = Executors.newSingleThreadExecutor()
         try {
             buildLandmarker()
@@ -98,6 +107,7 @@ class GestureService : LifecycleService() {
     override fun onDestroy() {
         running = false
         sendToLaptop = false
+        pointerMode = false
         onHand = null
         try {
             provider?.unbindAll()
@@ -110,6 +120,7 @@ class GestureService : LifecycleService() {
             // already closed
         }
         analysisExecutor?.shutdownNow()
+        trackExec.shutdownNow()
         super.onDestroy()
     }
 
@@ -119,6 +130,7 @@ class GestureService : LifecycleService() {
             .setRunningMode(RunningMode.LIVE_STREAM)
             .setNumHands(1)
             .setResultListener { result, _ ->
+                lastScore = result.handedness().firstOrNull()?.firstOrNull()?.score() ?: 0f
                 val hand = result.landmarks().firstOrNull()?.map { floatArrayOf(it.x(), it.y(), it.z()) }
                 onFrame(hand)
             }
@@ -167,6 +179,7 @@ class GestureService : LifecycleService() {
     private fun onFrame(hand: List<FloatArray>?) {
         val cb = onHand
         if (cb != null) main.post { cb(hand) }
+        if (pointerMode) sendTrack(hand)
         if (!sendToLaptop) return
         val label = if (hand != null) GestureTrainer.shared(this).classify(hand).first else null
         if (label != null && label == lastLabel) {
@@ -181,6 +194,48 @@ class GestureService : LifecycleService() {
             streak = 0
             send(label)
         }
+    }
+
+    /** Pointer mode: the index fingertip moves the laptop mouse; a pinch presses it. About 10 frames a second. */
+    private fun sendTrack(hand: List<FloatArray>?) {
+        val now = System.currentTimeMillis()
+        if (now - lastTrackSent < 100L) return
+        if (!trackBusy.compareAndSet(false, true)) return      // the last frame is still on its way
+        lastTrackSent = now
+        val body = JSONObject()
+        if (hand != null && hand.size >= 21) {
+            val tip = hand[8]
+            // The front camera image is mirrored, so flip x: moving your hand right moves the pointer right.
+            body.put("tip", org.json.JSONArray().put((1.0 - tip[0]).toDouble()).put(tip[1].toDouble()))
+            val size = dist(hand[0], hand[9]).coerceAtLeast(1e-4f)
+            val gap = dist(hand[4], hand[8]) / size
+            if (!pinching && gap < 0.25f) pinching = true
+            else if (pinching && gap > 0.40f) pinching = false
+            body.put("pinch", pinching)
+            body.put("conf", lastScore.toDouble())
+            val label = GestureTrainer.shared(this).classify(hand).first
+            if (label != null) body.put("label", label)
+        } else {
+            pinching = false
+            body.put("tip", JSONObject.NULL)
+            body.put("pinch", false)
+            body.put("conf", 0.0)
+        }
+        trackExec.execute {
+            try {
+                LaptopApi.call(this, "POST", "/gesture/track", body, 1500)
+            } catch (e: Exception) {
+                // laptop not reachable: the laptop releases a held button when frames stop
+            } finally {
+                trackBusy.set(false)
+            }
+        }
+    }
+
+    private fun dist(a: FloatArray, b: FloatArray): Float {
+        val dx = a[0] - b[0]
+        val dy = a[1] - b[1]
+        return kotlin.math.sqrt(dx * dx + dy * dy)
     }
 
     /** Sends only the gesture name. The laptop decides what it does (see /gesture on the laptop). */

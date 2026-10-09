@@ -26,6 +26,7 @@ import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -43,12 +44,19 @@ class GestureService : LifecycleService() {
         private const val COOLDOWN_MS = 1200L   // after a send, wait this long before the next
 
         @Volatile var running = false
+        @Volatile var starting = false
         @Volatile var sendToLaptop = false
         /** Pointer mode: the index finger moves the laptop mouse, a pinch presses it. */
         @Volatile var pointerMode = false
 
-        /** Set by the trainer screen to get each frame's hand (null = no hand). Called on the main thread. */
+        /** Set by the gesture screen to get each frame's hand (null = no hand). Called on the main thread. */
         @Volatile var onHand: ((List<FloatArray>?) -> Unit)? = null
+
+        /** Set by the gesture screen to hear about status changes. Called on the main thread. */
+        @Volatile var onStatus: ((String, String) -> Unit)? = null
+
+        /** The latest status lines: "camera" (what the phone camera is doing) and "laptop" (what the laptop said). */
+        val status = ConcurrentHashMap<String, String>()
 
         fun start(ctx: Context) {
             ContextCompat.startForegroundService(ctx, Intent(ctx, GestureService::class.java))
@@ -72,6 +80,7 @@ class GestureService : LifecycleService() {
     private var lastScore = 0f
     private var lastTrackSent = 0L
     private var pinching = false
+    private var failed = false
 
     override fun onCreate() {
         super.onCreate()
@@ -80,25 +89,29 @@ class GestureService : LifecycleService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-        val notice = buildNotification("Watching for your gestures")
+        val notice = buildNotification("Starting the camera...")
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(NOTIF_ID, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA)
         } else {
             startForeground(NOTIF_ID, notice)
         }
-        if (running) return START_STICKY
+        if (running || starting) return START_STICKY
+        starting = true
         val prefs = getSharedPreferences("jarvis_control", MODE_PRIVATE)
         sendToLaptop = prefs.getBoolean("gesture_send", false)
         pointerMode = prefs.getBoolean("gesture_pointer", false)
+        say("camera", "Starting...")
         analysisExecutor = Executors.newSingleThreadExecutor()
         try {
             buildLandmarker()
             bindCamera()
             running = true
         } catch (e: Exception) {
-            updateNotice("Gesture camera failed: ${e.message}")
+            failed = true
+            say("camera", "Camera failed: ${e.message}")
             stopSelf()
         }
+        starting = false
         return START_STICKY
     }
 
@@ -109,6 +122,10 @@ class GestureService : LifecycleService() {
         sendToLaptop = false
         pointerMode = false
         onHand = null
+        if (!failed) {
+            status["camera"] = "Off"
+            main.post { onStatus?.invoke("camera", "Off") }
+        }
         try {
             provider?.unbindAll()
         } catch (e: Exception) {
@@ -124,6 +141,13 @@ class GestureService : LifecycleService() {
         super.onDestroy()
     }
 
+    /** One status line for the gesture screen. Only a change is shown, so the screen is not redrawn for nothing. */
+    private fun say(what: String, text: String) {
+        if (status.put(what, text) == text) return
+        if (what == "camera") updateNotice(text)
+        main.post { onStatus?.invoke(what, text) }
+    }
+
     private fun buildLandmarker() {
         val options = HandLandmarker.HandLandmarkerOptions.builder()
             .setBaseOptions(BaseOptions.builder().setModelAssetPath("hand_landmarker.task").build())
@@ -134,7 +158,7 @@ class GestureService : LifecycleService() {
                 val hand = result.landmarks().firstOrNull()?.map { floatArrayOf(it.x(), it.y(), it.z()) }
                 onFrame(hand)
             }
-            .setErrorListener { e -> updateNotice("Hand tracking error: ${e.message}") }
+            .setErrorListener { e -> say("camera", "Hand tracking error: ${e.message}") }
             .build()
         landmarker = HandLandmarker.createFromOptions(this, options)
     }
@@ -152,8 +176,10 @@ class GestureService : LifecycleService() {
                 analysis.setAnalyzer(analysisExecutor!!) { frame -> detect(frame) }
                 p.unbindAll()
                 p.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, analysis)
+                say("camera", "On. Show your hand to the camera.")
             } catch (e: Exception) {
-                updateNotice("No front camera available: ${e.message}")
+                failed = true
+                say("camera", "No front camera: ${e.message}")
                 stopSelf()
             }
         }, ContextCompat.getMainExecutor(this))
@@ -223,9 +249,14 @@ class GestureService : LifecycleService() {
         }
         trackExec.execute {
             try {
-                LaptopApi.call(this, "POST", "/gesture/track", body, 1500)
+                val reply = LaptopApi.call(this, "POST", "/gesture/track", body, 1500)
+                if (reply.has("error")) {
+                    say("laptop", "Pointer: " + reply.optString("error"))
+                } else {
+                    say("laptop", "Pointer: " + reply.optString("note", "ok"))
+                }
             } catch (e: Exception) {
-                // laptop not reachable: the laptop releases a held button when frames stop
+                say("laptop", "Pointer: no reply from the laptop")
             } finally {
                 trackBusy.set(false)
             }
@@ -245,7 +276,7 @@ class GestureService : LifecycleService() {
             val reply = LaptopApi.call(this, "POST", "/gesture",
                 JSONObject().put("label", label).put("context", context), 3000)
             val text = reply.optString("note", reply.optString("error", "sent"))
-            updateNotice("$label -> $text")
+            say("laptop", "Gesture '$label': $text")
         }.start()
     }
 
@@ -256,7 +287,7 @@ class GestureService : LifecycleService() {
         )
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setContentTitle("Jarvis gestures: camera is ON")
+            .setContentTitle("Jarvis gestures")
             .setContentText(text)
             .setContentIntent(open)
             .setOngoing(true)

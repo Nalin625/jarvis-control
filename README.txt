@@ -1,27 +1,30 @@
-JARVIS GESTURE APP - read this first
+JARVIS GESTURES - READ THIS FIRST (updated)
 
-WHAT THIS IS
-This is your Jarvis Control Android project with the gesture camera added.
-Your phone camera reads your hand. Only the gesture name goes to the laptop.
+WHAT CHANGED
+- The Jarvis Gestures screen now shows what is happening: camera, hand seen, laptop pointer, laptop reply.
+- Big ON/OFF buttons instead of switches.
+- Camera problems and laptop problems are shown on the screen, not only in the notification.
+- CHECK THE LAPTOP asks the laptop whether it can move the mouse.
 
-INSTALL (same way as before)
-1. Replace the contents of your Jarvis Control GitHub project with this folder.
-   (Or copy it into your project folder and push.)
-2. GitHub Actions builds the APK. It downloads the hand-tracking model automatically.
-3. Install the APK on your phone.
-4. Open the NEW app icon: "Jarvis Gestures".
+LAPTOP (one time)
+Open a terminal on the laptop and run:
+
+    sudo apt install xdotool
+
+Then replace jarvis_server.py and jarvis_native.py with the new files and restart JARVIS.
+
+PHONE
+1. Put this folder into your Jarvis Control project (replace the old files) and push to GitHub.
+2. On GitHub open Actions > Build APK and wait for the green tick.
+3. Install the new APK from that run (artifact JarvisControl-build). Open "Jarvis Gestures".
 
 USE IT
-1. Allow the camera when asked.
-2. Type a gesture name, e.g. pinch. Press "Record 10 examples" and hold the sign still.
-3. Press "Test my gestures" and check it says "I see: pinch".
-4. Turn on "Camera on". A notification stays up while the camera is on.
-5. Turn on "Send recognised gestures to the laptop".
+1. Press START CAMERA and allow the camera. "Camera: On" means it is watching.
+2. Press "Laptop pointer" to turn it ON. Point with your index finger. Pinch to click.
+   Make a fist to pause, open palm to resume.
+3. Teach a sign: type a name (for example: show tabs), press RECORD 10 EXAMPLES, hold the sign still.
+4. Press "Send gestures to the laptop" to ON, so trained signs reach the laptop.
 
-LAPTOP
-Replace jarvis_server.py and add jarvis_gestures.py (both are in the laptop update zip).
-Restart JARVIS.
-
-IF THE BUILD FAILS
-The build has NOT been compiled yet. Copy the first error lines from the GitHub run
-page and send them to me. I'll fix them.
+IF SOMETHING DOES NOT RESPOND
+Look at the RIGHT NOW box. It says what is wrong, for example "no mouse helper" or "Can't reach the laptop".
+If the build is red, copy the first error lines from the run page and send them.

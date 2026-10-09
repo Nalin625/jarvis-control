@@ -16,6 +16,7 @@ import android.os.VibratorManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import fi.iki.elonen.NanoHTTPD
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 
@@ -73,6 +74,9 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
                 "/clipboard" -> handleClipboard(session)
                 "/screen.jpg" -> handleScreenFrame(session)
                 "/screen/status" -> handleScreenStatus()
+                "/lock" -> handleLock()
+                "/power" -> handlePower()
+                "/apps" -> handleApps()
                 else -> json(JSONObject().put("error", "unknown endpoint"), Response.Status.NOT_FOUND)
             }
         } catch (e: Exception) {
@@ -331,6 +335,42 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
                 .put("width", ScreenShareState.width)
                 .put("height", ScreenShareState.height)
         )
+    }
+
+    private val needsAccessibility =
+        "The phone's accessibility blocker is off. Turn on Jarvis night lock in Accessibility (Night Lock section) first."
+
+    private fun handleLock(): Response {
+        val svc = NightLockService.instance ?: return json(JSONObject().put("error", needsAccessibility))
+        return if (svc.lockScreen()) {
+            json(JSONObject().put("ok", true).put("message", "Phone screen locked."))
+        } else {
+            json(JSONObject().put("error", "This phone couldn't lock the screen. Android 9 or newer is needed."))
+        }
+    }
+
+    private fun handlePower(): Response {
+        val svc = NightLockService.instance ?: return json(JSONObject().put("error", needsAccessibility))
+        return if (svc.powerMenu()) {
+            json(JSONObject().put("ok", true).put("message", "Power menu opened on your phone. Tap Power off there."))
+        } else {
+            json(JSONObject().put("error", "This phone couldn't open the power menu. Android 9 or newer is needed."))
+        }
+    }
+
+    /** Every app that has an icon on the home screen, sorted by name. */
+    private fun handleApps(): Response {
+        val pm = context.packageManager
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val apps = pm.queryIntentActivities(launcher, 0)
+            .map { it.loadLabel(pm).toString() to it.activityInfo.packageName }
+            .distinctBy { it.second }
+            .sortedBy { it.first.lowercase() }
+        val list = JSONArray()
+        for ((name, pkg) in apps) {
+            list.put(JSONObject().put("name", name).put("package", pkg))
+        }
+        return json(JSONObject().put("count", apps.size).put("apps", list))
     }
 
     /**

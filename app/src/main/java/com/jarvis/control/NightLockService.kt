@@ -23,6 +23,8 @@ class NightLockService : AccessibilityService() {
     companion object {
         /** True while the system has this service connected. */
         @Volatile var alive = false
+        /** The connected service, so the laptop's commands can lock the screen or open the power menu. */
+        @Volatile var instance: NightLockService? = null
         private var lastShown = 0L
         private const val CHANNEL = "night_lock"
         private const val NOTIF_ID = 91
@@ -31,8 +33,17 @@ class NightLockService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         alive = true
+        instance = this
         keepAlive()
     }
+
+    /** Locks the phone screen, like the power button. Needs Android 9 or newer. */
+    fun lockScreen(): Boolean =
+        Build.VERSION.SDK_INT >= 28 && performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
+
+    /** Opens the power menu. Android doesn't let an app switch the phone off, so you still tap Power off. */
+    fun powerMenu(): Boolean =
+        Build.VERSION.SDK_INT >= 28 && performGlobalAction(GLOBAL_ACTION_POWER_DIALOG)
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
@@ -54,6 +65,7 @@ class NightLockService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         alive = false
+        instance = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         return super.onUnbind(intent)
     }

@@ -445,6 +445,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildHome() {
         val tiles = listOf(
+            Tile("\uD83D\uDD90", "Gestures") { startActivity(Intent(this, GestureActivity::class.java)) },
+            Tile("\uD83C\uDF03", "Night lock") { startActivity(Intent(this, NightLockActivity::class.java)) },
             Tile("\u26A1", "Server on") { startJarvisService() },
             Tile("\u23F9", "Server off") { stopJarvisService() },
             Tile("\uD83D\uDCE1", "Find laptop") { findAndConnect() },

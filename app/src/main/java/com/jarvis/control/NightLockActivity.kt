@@ -24,6 +24,8 @@ class NightLockActivity : AppCompatActivity() {
     private lateinit var toggleBtn: Button
     private lateinit var startBtn: Button
     private lateinit var endBtn: Button
+    private lateinit var batteryLine: TextView
+    private lateinit var batteryBtn: Button
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
@@ -86,6 +88,19 @@ class NightLockActivity : AppCompatActivity() {
         lockLine = line(15f, "#E8F7FF")
         column.addView(lockLine)
 
+        column.addView(line(14f, "#8FB7C9").apply {
+            text = "KEEP IT RUNNING  //  do this during the day"
+            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+        })
+        batteryLine = line(14f, "#E8F7FF")
+        column.addView(batteryLine)
+        batteryBtn = button { askBatteryUnrestricted() }.apply { text = "ALLOW UNRESTRICTED BATTERY" }
+        column.addView(batteryBtn)
+        column.addView(line(13f, "#8FB7C9").apply {
+            text = "Also set Autostart on for Jarvis Control in your phone's Security app, " +
+                "and lock Jarvis in recent apps. Phones still close apps without these."
+        })
+
         val scroll = ScrollView(this).apply { addView(column) }
         setContentView(scroll)
     }
@@ -114,6 +129,29 @@ class NightLockActivity : AppCompatActivity() {
             locked -> "LOCKED until $e. The lock settings can't be changed until then."
             on -> "On. Starts at $s and ends at $e."
             else -> "Off."
+        }
+
+        val unrestricted = (getSystemService(android.os.PowerManager::class.java))
+            ?.isIgnoringBatteryOptimizations(packageName) == true
+        batteryLine.text = if (unrestricted) {
+            "Battery: unrestricted. Good."
+        } else {
+            "Battery: restricted. Android may stop the lock in the background."
+        }
+        batteryBtn.isEnabled = !unrestricted
+    }
+
+    /** Asks Android to let Jarvis run without battery limits. Opens a system dialog, so do it during the day. */
+    private fun askBatteryUnrestricted() {
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    android.net.Uri.parse("package:$packageName")
+                )
+            )
+        } catch (e: Exception) {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }
     }
 

@@ -26,6 +26,7 @@
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <queries>
         <package android:name="com.termux" />
@@ -155,13 +156,8 @@
 
         <activity
             android:name=".GestureActivity"
-            android:exported="true"
-            android:label="Jarvis Gestures">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:exported="false"
+            android:label="Jarvis Gestures" />
 
         <service
             android:name=".GestureService"
@@ -195,13 +191,8 @@
 
         <activity
             android:name=".NightLockActivity"
-            android:exported="true"
-            android:label="Night Lock">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:exported="false"
+            android:label="Night Lock" />
 
         <activity
             android:name=".NightLockScreen"

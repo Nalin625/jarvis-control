@@ -28,7 +28,17 @@ class JarvisNotificationListener : NotificationListenerService() {
     private fun isWhatsApp(pkg: String) = pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b"
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        if (isWhatsApp(sbn.packageName)) CallAssistService.waPosted(sbn)
+        if (isWhatsApp(sbn.packageName)) {
+            try {
+                val n = sbn.notification
+                val acts = n.actions?.joinToString("|") { it.title?.toString().orEmpty() } ?: ""
+                getSharedPreferences("jarvis_control", MODE_PRIVATE).edit().putString("wa_last",
+                    java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()) +
+                        " category=" + (n.category ?: "none") + " buttons=[" + acts + "] title=" +
+                        (n.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: "")).apply()
+            } catch (e: Exception) { }
+            CallAssistService.waPosted(sbn)
+        }
         val p = prefs()
         if (!p.getBoolean("notif_forward_enabled", false)) return
 

@@ -37,6 +37,7 @@ class MainActivity : AppCompatActivity() {
     private var serviceRunning = false
     private var pageIndex = 0
     private var callCardView: android.view.View? = null
+    private var callRoleBtn: android.widget.Button? = null
     private var scanAnim: ValueAnimator? = null
     private var deckResponse: android.widget.TextView? = null
     private var homeGrid: android.widget.LinearLayout? = null
@@ -302,6 +303,30 @@ class MainActivity : AppCompatActivity() {
             callStatus.text = "Gemini key removed. Calls use the phone AI."
             true
         }
+        lateinit var roleBtn: android.widget.Button
+        fun roleLabel() = if (CallAssistService.isCallManager(this)) "CALL MANAGER: JARVIS \u2714 (tap to change)" else "MAKE JARVIS THE CALL MANAGER (recommended)"
+        roleBtn = voiceButton(roleLabel()) {
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    val rm = getSystemService(android.app.role.RoleManager::class.java)
+                    if (rm.isRoleAvailable(android.app.role.RoleManager.ROLE_DIALER)) {
+                        startActivityForResult(rm.createRequestRoleIntent(android.app.role.RoleManager.ROLE_DIALER), 77)
+                    }
+                } else {
+                    startActivityForResult(android.content.Intent(android.telecom.TelecomManager.ACTION_CHANGE_DEFAULT_DIALER)
+                        .putExtra(android.telecom.TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME, packageName), 77)
+                }
+                callStatus.text = "Choose Jarvis Control, then Set as default. To undo: Settings > Apps > Default apps > Phone app."
+            } catch (e: Exception) { callStatus.text = "This phone would not open the picker: " + e.message }
+        }
+        callRoleBtn = roleBtn
+        val waCheckBtn = voiceButton("WHATSAPP CALL CHECK") {
+            val listeners = androidx.core.app.NotificationManagerCompat.getEnabledListenerPackages(this)
+            val access = listeners.contains(packageName)
+            callStatus.text = "Notification access: " + (if (access) "ON" else "OFF - open Settings > Notifications > Notification access and enable Jarvis Control") +
+                "\nAssistant running: " + CallAssistService.alive + "  mode: " + CallAssistService.mode(this) +
+                "\nLast WhatsApp notification seen: " + (prefs.getString("wa_last", "") ?: "").ifEmpty { "none yet - call yourself on WhatsApp and tap this again" }
+        }
         val callLogBtn = voiceButton("SHOW LAST CALL SUMMARIES") {
             callStatus.text = "Reading..."
             Thread { val t = CallBrain.recent(this, 3); runOnUiThread { callStatus.text = t } }.start()
@@ -323,7 +348,9 @@ class MainActivity : AppCompatActivity() {
             addView(callModeBtn)
             addView(callDelayBtn)
             addView(callKeyBtn)
+            addView(roleBtn)
             addView(callTestBtn)
+            addView(waCheckBtn)
             addView(callLogBtn)
             addView(callStatus)
         }
@@ -437,11 +464,84 @@ class MainActivity : AppCompatActivity() {
             Tile("\uD83D\uDCCB", "Paste to laptop") { pasteToLaptop() },
             Tile("\uD83D\uDCCA", "Laptop status") { showPage(1); sendDeck("status report") },
             Tile("\uD83C\uDFA8", "Theme") { toggleTheme() },
-            Tile("\u2699", "Setup") { showPage(4) }
+            Tile("\u2699", "Setup") { showPage(4) },
+            // ---- Phone tools (PhoneTools.kt) ----
+            Tile("\ud83d\udd26", "Flashlight") { phoneResult(PhoneTools.flashlight(this)) },
+            Tile("\ud83d\udcf3", "Buzz") { phoneResult(PhoneTools.buzz(this)) },
+            Tile("\ud83d\udd0b", "Battery") { phoneResult(PhoneTools.battery(this)) },
+            Tile("\ud83d\udcbe", "Storage") { phoneResult(PhoneTools.storage(this)) },
+            Tile("\u2139", "Phone info") { phoneResult(PhoneTools.info(this)) },
+            Tile("\ud83d\udcf6", "Wi-Fi settings") { phoneResult(PhoneTools.openWifi(this)) },
+            Tile("\ud83d\udd35", "Bluetooth") { phoneResult(PhoneTools.openBluetooth(this)) },
+            Tile("\ud83c\udf19", "Do not disturb") { phoneResult(PhoneTools.openDnd(this)) },
+            Tile("\ud83d\udcf7", "Camera") { phoneResult(PhoneTools.openCamera(this)) },
+            Tile("\ud83d\udcdc", "Call log") { phoneResult(PhoneTools.openCallLog(this)) },
+            Tile("\ud83d\udde3", "Last call") { showPhoneText("Last call", PhoneTools.lastCall(this)) },
+            Tile("\ud83d\udcce", "Copy last call") { phoneResult(PhoneTools.copyLastCall(this)) },
+            Tile("\ud83d\udd0a", "Music volume +") { phoneResult(PhoneTools.musicVolumeUp(this)) },
+            // ---- Phone tools 2 ----
+            Tile("\uD83D\uDD06", "Brightness +") { phoneResult(PhoneTools2.brightnessUp(this)) },
+            Tile("\uD83D\uDD05", "Brightness -") { phoneResult(PhoneTools2.brightnessDown(this)) },
+            Tile("\uD83D\uDD04", "Auto-rotate") { phoneResult(PhoneTools2.autoRotate(this)) },
+            Tile("\uD83D\uDDA5", "Display settings") { phoneResult(PhoneTools2.displaySettings(this)) },
+            Tile("\uD83C\uDF9A", "Sound settings") { phoneResult(PhoneTools2.soundSettings(this)) },
+            Tile("\uD83D\uDC41", "Keep screen on") { phoneResult(PhoneTools2.keepScreenOn(this)) },
+            Tile("\u2708", "Airplane mode") { phoneResult(PhoneTools2.airplaneMode(this)) },
+            Tile("\uD83D\uDCF2", "Hotspot") { phoneResult(PhoneTools2.hotspot(this)) },
+            Tile("\uD83D\uDCCD", "Location settings") { phoneResult(PhoneTools2.locationSettings(this)) },
+            Tile("\u267F", "Accessibility") { phoneResult(PhoneTools2.accessibilitySettings(this)) },
+            Tile("\uD83D\uDD52", "Date & time") { phoneResult(PhoneTools2.dateTimeSettings(this)) },
+            Tile("\uD83E\uDDE9", "App info") { phoneResult(PhoneTools2.appInfo(this)) },
+            Tile("\u23F0", "Clock app") { phoneResult(PhoneTools2.openClock(this)) },
+            Tile("\u23F3", "Timer app") { phoneResult(PhoneTools2.openTimers(this)) },
+            Tile("\u23F2", "1-min timer") { phoneResult(PhoneTools2.oneMinuteTimer(this)) },
+            Tile("\uD83D\uDCC5", "Calendar") { phoneResult(PhoneTools2.openCalendar(this)) },
+            Tile("\uD83D\uDCDD", "Keep notes") { phoneResult(PhoneTools2.openKeep(this)) },
+            Tile("\uD83D\uDC64", "Contacts") { phoneResult(PhoneTools2.openContacts(this)) },
+            Tile("\uD83D\uDDBC", "Gallery") { phoneResult(PhoneTools2.openGallery(this)) },
+            Tile("\uD83D\uDDFA", "Maps") { phoneResult(PhoneTools2.openMaps(this)) },
+            Tile("\uD83C\uDFAC", "YouTube") { phoneResult(PhoneTools2.openYouTube(this)) },
+            Tile("\uD83D\uDCAC", "WhatsApp") { phoneResult(PhoneTools2.openWhatsApp(this)) },
+            Tile("\u2709", "Gmail") { phoneResult(PhoneTools2.openGmail(this)) },
+            Tile("\uD83C\uDFB5", "Music app") { phoneResult(PhoneTools2.openMusic(this)) },
+            Tile("\uD83E\uDDEE", "Calculator") { phoneResult(PhoneTools2.openCalculator(this)) },
+            Tile("\uD83D\uDCC1", "Files") { phoneResult(PhoneTools2.openFiles(this)) },
+            Tile("\u260E", "Dialer") { phoneResult(PhoneTools2.openDialer(this)) },
+            Tile("\uD83D\uDCE9", "New text") { phoneResult(PhoneTools2.newText(this)) },
+            Tile("\uD83D\uDCE7", "New email") { phoneResult(PhoneTools2.newEmail(this)) },
+            Tile("\uD83D\uDD0D", "Search clip") { phoneResult(PhoneTools2.searchClipboard(this)) },
+            Tile("\uD83C\uDF0D", "Open clip link") { phoneResult(PhoneTools2.openClipLink(this)) },
+            Tile("\uD83D\uDCF6", "Wi-Fi name") { phoneResult(PhoneTools2.wifiName(this)) },
+            Tile("\uD83C\uDF10", "Phone IP") { phoneResult(PhoneTools2.phoneIp(this)) },
+            Tile("\uD83D\uDCC4", "Copy IP") { phoneResult(PhoneTools2.copyIp(this)) },
+            Tile("\uD83D\uDD0C", "Network type") { phoneResult(PhoneTools2.networkType(this)) },
+            Tile("\uD83D\uDD70", "Uptime") { phoneResult(PhoneTools2.uptime()) },
+            Tile("\uD83D\uDD22", "App count") { showPhoneText("App count", PhoneTools2.appCount(this)) },
+            Tile("\uD83D\uDD15", "Notif status") { showPhoneText("Notifications", PhoneTools2.notifStatus(this)) },
+            Tile("\uD83D\uDCC6", "Copy date/time") { phoneResult(PhoneTools2.copyDateTime(this)) },
+            Tile("\uD83C\uDF0E", "World clock") { showPhoneText("World clock", PhoneTools2.worldClock()) },
+            Tile("\uD83C\uDFB2", "Random 1-100") { phoneResult(PhoneTools2.randomNumber()) },
+            Tile("\u2696", "Coin flip") { phoneResult(PhoneTools2.coinFlip()) },
+            Tile("\u2680", "Roll dice") { phoneResult(PhoneTools2.rollDice()) },
+            Tile("\u23F1", "Stopwatch") { phoneResult(PhoneTools2.stopwatch()) },
+            Tile("\uD83C\uDFC1", "Stopwatch lap") { phoneResult(PhoneTools2.stopwatchLap()) },
+            Tile("\uD83C\uDD98", "SOS flash") { phoneResult(PhoneTools2.flashSos(this)) },
+            Tile("\uD83D\uDC93", "Heartbeat buzz") { phoneResult(PhoneTools2.heartbeat(this)) },
+            Tile("\u270F", "Quick note") { PhoneTools2.quickNote(this) },
+            Tile("\uD83D\uDCE4", "Share app") { phoneResult(PhoneTools2.shareApp(this)) },
+            Tile("\uD83D\uDED2", "App store") { phoneResult(PhoneTools2.appStore(this)) }
         )
         val g = Fx.grid(this, tiles, 3)
         homeGrid = g
         binding.homeColumn.addView(g)
+    }
+
+    private fun phoneResult(msg: String) {
+        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+    }
+
+    private fun showPhoneText(title: String, body: String) {
+        AlertDialog.Builder(this).setTitle(title).setMessage(body).setPositiveButton("OK", null).show()
     }
 
     private fun buildDeck() {
@@ -1124,6 +1224,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onResume() {
+        callRoleBtn?.text = if (CallAssistService.isCallManager(this)) "CALL MANAGER: JARVIS \u2714 (tap to change)" else "MAKE JARVIS THE CALL MANAGER (recommended)"
         super.onResume()
         // notification access is granted/revoked from a separate system settings screen,
         // so re-check every time the user comes back to this activity

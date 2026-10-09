@@ -50,6 +50,8 @@ class CallAssistService : Service() {
         private const val CH_ALERT = "jarvis_call_alert"
         const val ACT_ANSWER = "com.jarvis.control.CALL_ANSWER"
         const val ACT_MINE = "com.jarvis.control.CALL_MINE"
+        const val ACT_DECLINE = "com.jarvis.control.CALL_DECLINE"
+        const val ACT_TAKEOVER = "com.jarvis.control.CALL_TAKEOVER"
 
         @Volatile var alive = false
         @Volatile var inSession = false
@@ -104,6 +106,22 @@ class CallAssistService : Service() {
             s.handler.post { s.onWaGone(key) }
         }
 
+        /** Called by JarvisInCallService (Jarvis is the phone's call manager): the reliable route. */
+        fun telecomAdded(c: android.telecom.Call) {
+            val s = instance
+            if (s == null) { start(appCtx ?: return); return }
+            s.handler.post { s.onTelecomAdded(c) }
+        }
+        fun telecomState(c: android.telecom.Call, st: Int) { instance?.let { s -> s.handler.post { s.onTelecomState(c, st) } } }
+        fun telecomRemoved(c: android.telecom.Call) { instance?.let { s -> s.handler.post { s.onTelecomRemoved(c) } } }
+        var appCtx: Context? = null
+        fun isCallManager(ctx: Context): Boolean = try {
+            (ctx.getSystemService(Context.TELECOM_SERVICE) as TelecomManager).defaultDialerPackage == ctx.packageName
+        } catch (e: Exception) { false }
+
+        fun mineNow() { instance?.let { s -> s.handler.post { s.handler.removeCallbacks(s.autoAnswerRunnable()); s.cancelAlertPublic() } } }
+        fun takeOverNow() { instance?.let { s -> s.handler.post { s.takeOver() } } }
+
         fun answerNow(): Boolean {
             val s = instance ?: return false
             if (!s.ringing) return false
@@ -142,27 +160,33 @@ class CallAssistService : Service() {
     private val history = ArrayList<Pair<String, String>>()
     private var usedLaptop = false
 
+    var tcall: android.telecom.Call? = null
+    @Volatile private var earBroken = false
+
     private var waMode = false
     private var waKey = ""
     private var waAnswer: PendingIntent? = null
     private var waHangup: PendingIntent? = null
 
     private val autoAnswer = Runnable { if (ringing) answer() }
+    fun autoAnswerRunnable(): Runnable = autoAnswer
+    fun cancelAlertPublic() = cancelAlert()
 
     private val phoneReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
             val st = i.getStringExtra(TelephonyManager.EXTRA_STATE) ?: return
             val num = i.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)
             when (st) {
-                TelephonyManager.EXTRA_STATE_RINGING -> onRinging(num)
-                TelephonyManager.EXTRA_STATE_OFFHOOK -> onOffhook()
-                TelephonyManager.EXTRA_STATE_IDLE -> onIdle()
+                TelephonyManager.EXTRA_STATE_RINGING -> if (tcall == null) onRinging(num)
+                TelephonyManager.EXTRA_STATE_OFFHOOK -> if (tcall == null) onOffhook()
+                TelephonyManager.EXTRA_STATE_IDLE -> if (tcall == null) onIdle()
             }
         }
     }
 
     override fun onCreate() {
         super.onCreate()
+        appCtx = applicationContext
         audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NotificationManager::class.java)
@@ -212,6 +236,8 @@ class CallAssistService : Service() {
         when (intent?.action) {
             ACT_ANSWER -> answer()
             ACT_MINE -> { handler.removeCallbacks(autoAnswer); cancelAlert() }
+            ACT_DECLINE -> { handler.removeCallbacks(autoAnswer); cancelAlert(); declineCall() }
+            ACT_TAKEOVER -> takeOver()
         }
         return START_STICKY
     }
@@ -231,6 +257,50 @@ class CallAssistService : Service() {
 
     // ------------------------------------------------------------ phone state
     private fun delaySec(): Int = getSharedPreferences("jarvis_control", MODE_PRIVATE).getInt("call_delay", 15)
+
+    // ---- call manager (InCallService) route
+    private fun numberOf(c: android.telecom.Call): String = c.details?.handle?.schemeSpecificPart.orEmpty()
+
+    fun onTelecomAdded(c: android.telecom.Call) {
+        tcall = c
+        waMode = false
+        if (c.state == android.telecom.Call.STATE_RINGING) onTelecomState(c, c.state)
+    }
+
+    fun onTelecomState(c: android.telecom.Call, st: Int) {
+        if (tcall !== c) return
+        when (st) {
+            android.telecom.Call.STATE_RINGING -> {
+                if (mode(this) == "off" || inSession) return
+                if (!ringing) { ringing = true; announced = false; callerNumber = ""; callerName = "" }
+                val num = numberOf(c)
+                if (num.isNotBlank() && num != callerNumber) { callerNumber = num; callerName = lookupName(num) }
+                ringCommon()
+            }
+            android.telecom.Call.STATE_ACTIVE -> {
+                handler.removeCallbacks(autoAnswer); ringing = false; cancelAlert()
+                if (jarvisAnswered && !inSession) beginSession(false)
+            }
+            android.telecom.Call.STATE_DISCONNECTED -> onTelecomRemoved(c)
+        }
+    }
+
+    fun onTelecomRemoved(c: android.telecom.Call) {
+        if (tcall !== c) return
+        tcall = null
+        handler.removeCallbacks(autoAnswer)
+        ringing = false
+        cancelAlert()
+        if (inSession && !testing) endSession()
+        jarvisAnswered = false
+    }
+
+    private fun setSpeaker(on: Boolean) {
+        try { audio?.isSpeakerphoneOn = on } catch (e: Exception) { }
+        try {
+            JarvisInCallService.instance?.setAudioRoute(if (on) android.telecom.CallAudioState.ROUTE_SPEAKER else android.telecom.CallAudioState.ROUTE_EARPIECE)
+        } catch (e: Exception) { }
+    }
 
     private fun onRinging(num: String?) {
         if (mode(this) == "off" || inSession || waMode) return
@@ -346,6 +416,12 @@ class CallAssistService : Service() {
             cancelAlert()
             return
         }
+        val tc = tcall
+        if (tc != null) {
+            try { tc.answer(0); jarvisAnswered = true } catch (e: Exception) { }
+            cancelAlert()
+            return
+        }
         try {
             val tm = getSystemService(Context.TELECOM_SERVICE) as TelecomManager
             tm.acceptRingingCall()
@@ -360,8 +436,30 @@ class CallAssistService : Service() {
         cancelAlert()
     }
 
+    /** DECLINE: reject the ringing call with the official Telecom API (WhatsApp: its own Hang up action). */
+    private fun declineCall() {
+        try {
+            val tc = tcall
+            if (tc != null) { tc.reject(false, null); ringing = false; return }
+            if (waMode) { waHangup?.send(); waMode = false; ringing = false; return }
+            if (Build.VERSION.SDK_INT >= 28) (getSystemService(Context.TELECOM_SERVICE) as TelecomManager).endCall()
+        } catch (e: Exception) { }
+        ringing = false
+    }
+
+    /** TAKE OVER: stop the AI conversation and leave the live call to the user (the call is NOT hung up). */
+    fun takeOver() {
+        if (!inSession) return
+        val wasTest = testing
+        endSession()
+        if (!wasTest) setSpeaker(false)
+        try { startForeground(3, foregroundNote("You took over the call"), if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0) } catch (e: Exception) { }
+    }
+
     private fun hangUp() {
         if (testing) { endSession(); return }
+        val tc = tcall
+        if (tc != null) { try { tc.disconnect() } catch (e: Exception) { }; handler.postDelayed({ if (inSession) endSession() }, 3000); return }
         if (waMode) {
             try { waHangup?.send() } catch (e: Exception) { }
             handler.postDelayed({ if (inSession) endSession() }, 3000)
@@ -394,6 +492,7 @@ class CallAssistService : Service() {
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         val ans = PendingIntent.getService(this, 11, Intent(this, CallAssistService::class.java).setAction(ACT_ANSWER), flags)
         val mine = PendingIntent.getService(this, 12, Intent(this, CallAssistService::class.java).setAction(ACT_MINE), flags)
+        val dec = PendingIntent.getService(this, 13, Intent(this, CallAssistService::class.java).setAction(ACT_DECLINE), flags)
         val auto = mode(this) == "auto"
         val n = NotificationCompat.Builder(this, CH_ALERT)
             .setSmallIcon(android.R.drawable.sym_action_call)
@@ -402,8 +501,9 @@ class CallAssistService : Service() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setOngoing(true)
-            .addAction(0, "Jarvis answers", ans)
-            .addAction(0, "I'll answer", mine)
+            .addAction(0, "Let Jarvis handle", ans)
+            .addAction(0, "Talk myself", mine)
+            .addAction(0, "Decline", dec)
             .build()
         try { getSystemService(NotificationManager::class.java).notify(4, n) } catch (e: Exception) { }
     }
@@ -425,10 +525,20 @@ class CallAssistService : Service() {
         history.clear()
         usedLaptop = false
         MicService.pauseMic(true)
+        try {
+            val tk = PendingIntent.getService(this, 14, Intent(this, CallAssistService::class.java).setAction(ACT_TAKEOVER), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            val note = NotificationCompat.Builder(this, CH_ALERT)
+                .setSmallIcon(android.R.drawable.sym_action_call)
+                .setContentTitle("JARVIS IS HANDLING THE CALL")
+                .setContentText("Tap TAKE OVER to talk yourself")
+                .setPriority(NotificationCompat.PRIORITY_HIGH).setCategory(NotificationCompat.CATEGORY_CALL)
+                .setOngoing(true).addAction(0, "TAKE OVER", tk).build()
+            getSystemService(NotificationManager::class.java).notify(5, note)
+        } catch (e: Exception) { }
         if (!test) {
             val am = audio
+            setSpeaker(true)
             if (am != null) {
-                am.isSpeakerphoneOn = true
                 try { am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL), 0) } catch (e: Exception) { }
             }
         }
@@ -444,13 +554,13 @@ class CallAssistService : Service() {
     private fun endSession() {
         if (!inSession) return
         inSession = false
+        try { getSystemService(NotificationManager::class.java).cancel(5) } catch (e: Exception) { }
         handler.removeCallbacksAndMessages(null)
         try { tts?.stop() } catch (e: Exception) { }
         try { recognizer?.destroy() } catch (e: Exception) { }
         recognizer = null
-        if (!testing) {
-            audio?.isSpeakerphoneOn = false
-        }
+        CallEar.stop = true
+        if (!testing) setSpeaker(false)
         MicService.pauseMic(false)
         val who = if (testing) "Test call" else if (callerName.isNotBlank()) callerName else if (callerNumber.isNotBlank()) callerNumber else "Unknown number"
         val num = if (testing) "test" else callerNumber
@@ -495,8 +605,35 @@ class CallAssistService : Service() {
         }
     }
 
+    /** Own microphone recording + Gemini speech-to-text: works even when Android silences the Google recognizer during calls. */
+    private fun listenEar() {
+        if (!inSession) return
+        Thread {
+            val r = CallEar.capture()
+            handler.post {
+                if (!inSession) return@post
+                when {
+                    r.failed || r.dead -> { earBroken = true; listen() }
+                    r.wav == null -> heardNothing(SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+                    else -> Thread {
+                        val t = CallBrain.transcribe(applicationContext, r.wav)
+                        handler.post {
+                            if (!inSession) return@post
+                            when {
+                                t == null -> { errors++; if (errors > 6) heardNothing(SpeechRecognizer.ERROR_NETWORK) else listenEar() }
+                                t.isBlank() -> heardNothing(SpeechRecognizer.ERROR_NO_MATCH)
+                                else -> heard(t)
+                            }
+                        }
+                    }.start()
+                }
+            }
+        }.start()
+    }
+
     private fun listen() {
         if (!inSession) return
+        if (!earBroken && CallBrain.hasGemini(this)) { listenEar(); return }
         try { recognizer?.destroy() } catch (e: Exception) { }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             speak("Sorry, I can't listen right now. Please call back later. Goodbye.", "final", TextToSpeech.QUEUE_FLUSH)

@@ -105,6 +105,38 @@ object CallBrain {
         return if (out.isNullOrEmpty()) null else out
     }
 
+    fun hasGemini(ctx: Context): Boolean =
+        ctx.getSharedPreferences("jarvis_control", Context.MODE_PRIVATE).getString("call_gemini_key", "")?.trim().isNullOrEmpty().not()
+
+    /** Gemini listens to one recorded sentence (WAV) and writes down what was said. "" = nothing intelligible, null = failed. */
+    fun transcribe(ctx: Context, wav: ByteArray): String? {
+        val key = ctx.getSharedPreferences("jarvis_control", Context.MODE_PRIVATE).getString("call_gemini_key", "")?.trim().orEmpty()
+        if (key.isEmpty()) return null
+        val parts = JSONArray()
+            .put(JSONObject().put("inline_data", JSONObject().put("mime_type", "audio/wav")
+                .put("data", android.util.Base64.encodeToString(wav, android.util.Base64.NO_WRAP))))
+            .put(JSONObject().put("text", "This is one sentence from a phone call (English, Hindi or Hinglish). Write down exactly what the speaker said, in the language they used. Output only those words. If there is no clear speech, output nothing."))
+        val body = JSONObject().put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
+            .put("generationConfig", JSONObject().put("maxOutputTokens", 120).put("temperature", 0.0))
+        for (m in listOf("gemini-flash-latest", "gemini-2.5-flash")) {
+            try {
+                val c = URL("https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent?key=$key").openConnection() as HttpURLConnection
+                c.connectTimeout = 4000; c.readTimeout = 15000
+                c.requestMethod = "POST"; c.doOutput = true
+                c.setRequestProperty("Content-Type", "application/json")
+                c.outputStream.use { it.write(body.toString().toByteArray()) }
+                val code = c.responseCode
+                if (code == 404) { c.disconnect(); continue }
+                if (code != 200) { c.disconnect(); return null }
+                val text = c.inputStream.bufferedReader().readText()
+                c.disconnect()
+                return JSONObject(text).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")
+                    ?.optJSONArray("parts")?.optJSONObject(0)?.optString("text")?.trim().orEmpty()
+            } catch (e: Exception) { return null }
+        }
+        return null
+    }
+
     private fun clean(t: String): String =
         t.replace(Regex("\\[[^\\]]*\\]"), " ").replace(Regex("[*_#`>]+"), "").replace(Regex("\\s+"), " ").trim()
 
@@ -128,13 +160,15 @@ object CallBrain {
     /** Writes the summary of a finished call, stores it on the phone, returns it. */
     fun finish(ctx: Context, who: String, number: String, seconds: Long, history: List<Pair<String, String>>): String {
         val caller = history.filter { it.first == "caller" }.map { it.second }
-        val summary = if (caller.isEmpty()) "Jarvis answered but the caller did not say anything."
+        val summary0 = if (caller.isEmpty()) "Jarvis answered but the caller did not say anything."
         else {
             val talk = history.joinToString("\n") { (if (it.first == "caller") "Caller: " else "Jarvis: ") + it.second }
-            chat(ctx, "Summarize this phone call for the owner in at most 4 short lines: who called, what they wanted, any message, number, name or time they mentioned, and what the owner should do next. Plain text, factual, do not invent anything.",
-                listOf(Pair("caller", "Phone call from $who.\n\n" + talk.takeLast(4000))), 160, 90000)?.let { clean(it) }
+            chat(ctx, "Summarize this phone call for the owner. Reply in plain text with exactly these labelled lines, each one short, writing 'None' when empty, and never invent anything:\nReason: why they called\nSummary: what was said\nImportant: names, numbers, times, facts mentioned\nDecisions: anything agreed\nAction items: what the owner should do\nFollow-up: whether and when to call back",
+                listOf(Pair("caller", "Phone call from $who.\n\n" + talk.takeLast(4000))), 320, 90000)?.let { clean(it) }
                 ?: ("Caller said: " + caller.joinToString(" / ").take(300))
         }
+        val dur = "%d:%02d".format(seconds / 60, seconds % 60)
+        val summary = "CALL HANDLED BY JARVIS\nCaller: $who\nDuration: $dur\n\n" + summary0
         try {
             val f = File(ctx.filesDir, "calls.json")
             val arr = if (f.exists()) JSONArray(f.readText()) else JSONArray()

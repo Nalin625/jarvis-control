@@ -193,5 +193,35 @@
             </intent-filter>
         </service>
 
+        <activity
+            android:name=".NightLockActivity"
+            android:exported="true"
+            android:label="Night Lock">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".NightLockScreen"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTop"
+            android:label="Night lock" />
+
+        <service
+            android:name=".NightLockService"
+            android:exported="false"
+            android:label="Jarvis night lock"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/night_lock_service" />
+        </service>
+
     </application>
 </manifest>

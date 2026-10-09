@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Jarvis Control</string>
+    <string name="night_lock_description">At night, only the Phone and WhatsApp stay open. Other apps show the Jarvis lock screen. Jarvis reads only which app is in front, never the screen contents.</string>
 </resources>

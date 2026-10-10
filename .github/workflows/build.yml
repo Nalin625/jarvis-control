@@ -17,8 +17,8 @@ jobs:
           gradle-version: '8.7'
       - name: Fetch hand-tracking model
         run: |
-          mkdir -p app/app/src/main/assets
-          curl -fL -o app/app/src/main/assets/hand_landmarker.task \
+          mkdir -p app/src/main/assets
+          curl -fL -o app/src/main/assets/hand_landmarker.task \
             https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
 
       - name: Build debug APK

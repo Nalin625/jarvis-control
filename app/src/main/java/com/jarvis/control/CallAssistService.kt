@@ -41,7 +41,7 @@ import java.util.Locale
  * Android does not let apps talk into a phone call, so this uses the speakerphone trick:
  * answer -> speaker on -> Jarvis speaks (TTS) through the speaker and the phone mic carries it to the caller;
  * the caller's voice comes out of the speaker and the phone mic + speech recognition hears it.
- * The laptop is the brain (/call/turn) and writes the summary afterwards (/call/end).
+ * Call text processing is local-only; call data is never sent to the laptop.
  */
 class CallAssistService : Service() {
 

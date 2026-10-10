@@ -44,55 +44,9 @@ object CallBrain {
         return first
     }
 
-    /** Gemini first (fast) when a key was pasted in the app; Ollama on the phone is the fallback. */
+    /** Call text is processed only by the Ollama endpoint on this phone. */
     private fun chat(ctx: Context, system: String, msgs: List<Pair<String, String>>, maxTokens: Int, timeoutMs: Int): String? =
-        gemini(ctx, system, msgs, maxTokens, timeoutMs) ?: ollamaChat(ctx, system, msgs, maxTokens, timeoutMs)
-
-    private fun gemini(ctx: Context, system: String, msgs: List<Pair<String, String>>, maxTokens: Int, timeoutMs: Int): String? {
-        val key = ctx.getSharedPreferences("jarvis_control", Context.MODE_PRIVATE).getString("call_gemini_key", "")?.trim().orEmpty()
-        if (key.isEmpty()) return null
-        val contents = JSONArray()
-        var lastRole = ""
-        for ((r, t) in msgs) {
-            val role = if (r == "caller") "user" else "model"
-            if (contents.length() == 0 && role == "model") continue
-            if (role == lastRole) {
-                val o = contents.getJSONObject(contents.length() - 1)
-                val part = o.getJSONArray("parts").getJSONObject(0)
-                part.put("text", part.getString("text") + " " + t)
-            } else {
-                contents.put(JSONObject().put("role", role).put("parts", JSONArray().put(JSONObject().put("text", t))))
-                lastRole = role
-            }
-        }
-        if (contents.length() == 0) return null
-        val body = JSONObject()
-            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
-            .put("contents", contents)
-            .put("generationConfig", JSONObject().put("maxOutputTokens", maxTokens).put("temperature", 0.5))
-        for (m in listOf("gemini-flash-latest", "gemini-2.5-flash")) {
-            try {
-                val c = URL("https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent?key=$key").openConnection() as HttpURLConnection
-                c.connectTimeout = 4000
-                c.readTimeout = minOf(timeoutMs, 20000)
-                c.requestMethod = "POST"
-                c.doOutput = true
-                c.setRequestProperty("Content-Type", "application/json")
-                c.outputStream.use { it.write(body.toString().toByteArray()) }
-                val code = c.responseCode
-                if (code == 404) { c.disconnect(); continue }
-                if (code != 200) { c.disconnect(); return null }
-                val text = c.inputStream.bufferedReader().readText()
-                c.disconnect()
-                val out = JSONObject(text).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")
-                    ?.optJSONArray("parts")?.optJSONObject(0)?.optString("text")?.trim()
-                return if (out.isNullOrEmpty()) null else out
-            } catch (e: Exception) {
-                return null
-            }
-        }
-        return null
-    }
+        ollamaChat(ctx, system, msgs, maxTokens, timeoutMs)
 
     private fun ollamaChat(ctx: Context, system: String, msgs: List<Pair<String, String>>, maxTokens: Int, timeoutMs: Int): String? {
         val m = pickModel(ctx)
@@ -103,38 +57,6 @@ object CallBrain {
             .put("options", JSONObject().put("num_predict", maxTokens).put("temperature", 0.5))
         val out = http("/api/chat", body, timeoutMs)?.optJSONObject("message")?.optString("content")?.trim()
         return if (out.isNullOrEmpty()) null else out
-    }
-
-    fun hasGemini(ctx: Context): Boolean =
-        ctx.getSharedPreferences("jarvis_control", Context.MODE_PRIVATE).getString("call_gemini_key", "")?.trim().isNullOrEmpty().not()
-
-    /** Gemini listens to one recorded sentence (WAV) and writes down what was said. "" = nothing intelligible, null = failed. */
-    fun transcribe(ctx: Context, wav: ByteArray): String? {
-        val key = ctx.getSharedPreferences("jarvis_control", Context.MODE_PRIVATE).getString("call_gemini_key", "")?.trim().orEmpty()
-        if (key.isEmpty()) return null
-        val parts = JSONArray()
-            .put(JSONObject().put("inline_data", JSONObject().put("mime_type", "audio/wav")
-                .put("data", android.util.Base64.encodeToString(wav, android.util.Base64.NO_WRAP))))
-            .put(JSONObject().put("text", "This is one sentence from a phone call (English, Hindi or Hinglish). Write down exactly what the speaker said, in the language they used. Output only those words. If there is no clear speech, output nothing."))
-        val body = JSONObject().put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
-            .put("generationConfig", JSONObject().put("maxOutputTokens", 120).put("temperature", 0.0))
-        for (m in listOf("gemini-flash-latest", "gemini-2.5-flash")) {
-            try {
-                val c = URL("https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent?key=$key").openConnection() as HttpURLConnection
-                c.connectTimeout = 4000; c.readTimeout = 15000
-                c.requestMethod = "POST"; c.doOutput = true
-                c.setRequestProperty("Content-Type", "application/json")
-                c.outputStream.use { it.write(body.toString().toByteArray()) }
-                val code = c.responseCode
-                if (code == 404) { c.disconnect(); continue }
-                if (code != 200) { c.disconnect(); return null }
-                val text = c.inputStream.bufferedReader().readText()
-                c.disconnect()
-                return JSONObject(text).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")
-                    ?.optJSONArray("parts")?.optJSONObject(0)?.optString("text")?.trim().orEmpty()
-            } catch (e: Exception) { return null }
-        }
-        return null
     }
 
     private fun clean(t: String): String =

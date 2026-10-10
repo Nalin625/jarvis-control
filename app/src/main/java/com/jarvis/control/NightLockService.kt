@@ -1,11 +1,13 @@
 package com.jarvis.control
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.graphics.Path
 import android.os.Build
 import android.view.accessibility.AccessibilityEvent
 import androidx.core.app.NotificationCompat
@@ -44,6 +46,28 @@ class NightLockService : AccessibilityService() {
     /** Opens the power menu. Android doesn't let an app switch the phone off, so you still tap Power off. */
     fun powerMenu(): Boolean =
         Build.VERSION.SDK_INT >= 28 && performGlobalAction(GLOBAL_ACTION_POWER_DIALOG)
+
+    /** Presses Back, Home or Recents, like the phone's buttons. */
+    fun navigate(action: String): Boolean {
+        val code = when (action) {
+            "back" -> GLOBAL_ACTION_BACK
+            "home" -> GLOBAL_ACTION_HOME
+            "recents" -> GLOBAL_ACTION_RECENTS
+            else -> return false
+        }
+        return performGlobalAction(code)
+    }
+
+    /** Swipes from one point to another, in pixels, over [ms] milliseconds. Needs Android 7 or newer. */
+    fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, ms: Long): Boolean {
+        if (Build.VERSION.SDK_INT < 24) return false
+        val path = Path().apply { moveTo(x1, y1); lineTo(x2, y2) }
+        val stroke = GestureDescription.StrokeDescription(path, 0L, ms)
+        return dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+    }
+
+    /** Taps a point on the screen, in pixels. */
+    fun tap(x: Float, y: Float): Boolean = swipe(x, y, x + 1f, y + 1f, 50L)
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return

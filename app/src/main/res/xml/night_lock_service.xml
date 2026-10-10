@@ -3,5 +3,6 @@
     android:accessibilityEventTypes="typeWindowStateChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:canRetrieveWindowContent="false"
+    android:canPerformGestures="true"
     android:description="@string/night_lock_description"
     android:notificationTimeout="100" />

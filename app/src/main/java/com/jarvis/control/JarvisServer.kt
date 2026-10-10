@@ -1,5 +1,6 @@
 package com.jarvis.control
 
+import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
@@ -77,6 +78,9 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
                 "/lock" -> handleLock()
                 "/power" -> handlePower()
                 "/apps" -> handleApps()
+                "/tap" -> handleTap(session)
+                "/swipe" -> handleSwipe(session)
+                "/nav" -> handleNav(session)
                 else -> json(JSONObject().put("error", "unknown endpoint"), Response.Status.NOT_FOUND)
             }
         } catch (e: Exception) {
@@ -355,6 +359,97 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
             json(JSONObject().put("ok", true).put("message", "Power menu opened on your phone. Tap Power off there."))
         } else {
             json(JSONObject().put("error", "This phone couldn't open the power menu. Android 9 or newer is needed."))
+        }
+    }
+
+    /** True while the phone's screen is locked. The laptop never taps on a locked phone. */
+    private fun phoneLocked(): Boolean =
+        context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
+
+    private val lockedMsg =
+        "Your phone is locked. Unlock it yourself first; the laptop can't unlock it."
+
+    /**
+     * Taps a point on the screen. Body: {"fx": 0.5, "fy": 0.8} as fractions of the screen (what the
+     * laptop's mirror sends), or {"x": 540, "y": 1200} in pixels.
+     */
+    private fun handleTap(session: IHTTPSession): Response {
+        val svc = NightLockService.instance ?: return json(JSONObject().put("error", needsAccessibility))
+        if (phoneLocked()) return json(JSONObject().put("error", lockedMsg))
+        val b = readBody(session)
+        val m = context.resources.displayMetrics
+        val x: Float
+        val y: Float
+        if (b.has("fx")) {
+            val fx = b.optDouble("fx", -1.0)
+            val fy = b.optDouble("fy", -1.0)
+            if (fx < 0 || fy < 0 || fx > 1 || fy > 1) {
+                return json(JSONObject().put("error", "Give fx and fy between 0 and 1."))
+            }
+            x = (fx * m.widthPixels).toFloat()
+            y = (fy * m.heightPixels).toFloat()
+        } else {
+            val px = b.optDouble("x", -1.0)
+            val py = b.optDouble("y", -1.0)
+            if (px < 0 || py < 0) return json(JSONObject().put("error", "Give x and y in pixels."))
+            x = px.toFloat()
+            y = py.toFloat()
+        }
+        return if (svc.tap(x, y)) {
+            json(JSONObject().put("ok", true).put("message", "Tapped on your phone."))
+        } else {
+            json(JSONObject().put("error", "This phone couldn't tap. Android 7 or newer is needed."))
+        }
+    }
+
+    /**
+     * Swipes. Body: {"fx1", "fy1", "fx2", "fy2", "ms"} as fractions of the screen (a drag on the
+     * laptop's mirror), or {"dir": "up" | "down" | "left" | "right"} for a swipe across the middle.
+     */
+    private fun handleSwipe(session: IHTTPSession): Response {
+        val svc = NightLockService.instance ?: return json(JSONObject().put("error", needsAccessibility))
+        if (phoneLocked()) return json(JSONObject().put("error", lockedMsg))
+        val b = readBody(session)
+        val m = context.resources.displayMetrics
+        val w = m.widthPixels.toFloat()
+        val h = m.heightPixels.toFloat()
+        val pts: FloatArray
+        if (b.has("fx1")) {
+            val f = doubleArrayOf(
+                b.optDouble("fx1", -1.0), b.optDouble("fy1", -1.0),
+                b.optDouble("fx2", -1.0), b.optDouble("fy2", -1.0)
+            )
+            if (f.any { it < 0 || it > 1 }) {
+                return json(JSONObject().put("error", "Give fx1, fy1, fx2 and fy2 between 0 and 1."))
+            }
+            pts = floatArrayOf((f[0] * w).toFloat(), (f[1] * h).toFloat(), (f[2] * w).toFloat(), (f[3] * h).toFloat())
+        } else {
+            val cx = w / 2f
+            val cy = h / 2f
+            pts = when (b.optString("dir", "")) {
+                "up" -> floatArrayOf(cx, h * 0.8f, cx, h * 0.2f)
+                "down" -> floatArrayOf(cx, h * 0.2f, cx, h * 0.8f)
+                "left" -> floatArrayOf(w * 0.8f, cy, w * 0.2f, cy)
+                "right" -> floatArrayOf(w * 0.2f, cy, w * 0.8f, cy)
+                else -> return json(JSONObject().put("error", "Say up, down, left or right."))
+            }
+        }
+        val ms = b.optLong("ms", 300L).coerceIn(80L, 2000L)
+        return if (svc.swipe(pts[0], pts[1], pts[2], pts[3], ms)) {
+            json(JSONObject().put("ok", true).put("message", "Swiped on your phone."))
+        } else {
+            json(JSONObject().put("error", "This phone couldn't swipe. Android 7 or newer is needed."))
+        }
+    }
+
+    /** Presses Back, Home or Recents. Body: {"action": "back" | "home" | "recents"}. */
+    private fun handleNav(session: IHTTPSession): Response {
+        val svc = NightLockService.instance ?: return json(JSONObject().put("error", needsAccessibility))
+        val action = readBody(session).optString("action", "")
+        return if (svc.navigate(action)) {
+            json(JSONObject().put("ok", true).put("message", "Pressed $action."))
+        } else {
+            json(JSONObject().put("error", "Say back, home or recents."))
         }
     }
 

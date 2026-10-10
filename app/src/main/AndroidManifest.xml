@@ -47,6 +47,8 @@
     <application
         android:name=".JarvisApp"
         android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@android:drawable/ic_menu_manage"
         android:label="Jarvis Control"
         android:theme="@style/Theme.JarvisControl"

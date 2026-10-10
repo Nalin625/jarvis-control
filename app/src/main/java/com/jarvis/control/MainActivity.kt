@@ -83,6 +83,8 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         prefs = getSharedPreferences("jarvis_control", MODE_PRIVATE)
+        // Remove the legacy call-only Gemini credential without touching unrelated settings.
+        prefs.edit().remove("call_gemini_key").commit()
 
         val savedToken = prefs.getString("token", null) ?: generateToken().also {
             prefs.edit().putString("token", it).apply()
@@ -281,28 +283,6 @@ class MainActivity : AppCompatActivity() {
                 }, 1200)
             }
         }
-        fun keyLabel(): String {
-            val k = prefs.getString("call_gemini_key", "").orEmpty()
-            return if (k.isEmpty()) "PASTE GEMINI KEY (copy it first)" else "GEMINI KEY SAVED ...${k.takeLast(4)} (hold to remove)"
-        }
-        lateinit var callKeyBtn: android.widget.Button
-        callKeyBtn = voiceButton(keyLabel()) {
-            val clip = (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager).primaryClip
-            val txt = clip?.getItemAt(0)?.text?.toString()?.trim().orEmpty()
-            if (txt.startsWith("AIza") && txt.length > 30 && !txt.contains(" ")) {
-                prefs.edit().putString("call_gemini_key", txt).apply()
-                callKeyBtn.text = keyLabel()
-                callStatus.text = "Gemini key saved. Calls use Gemini first, the phone AI is the backup."
-            } else {
-                callStatus.text = "Copy your Gemini API key first (starts with AIza), then tap this again."
-            }
-        }
-        callKeyBtn.setOnLongClickListener {
-            prefs.edit().remove("call_gemini_key").apply()
-            callKeyBtn.text = keyLabel()
-            callStatus.text = "Gemini key removed. Calls use the phone AI."
-            true
-        }
         lateinit var roleBtn: android.widget.Button
         fun roleLabel() = if (CallAssistService.isCallManager(this)) "CALL MANAGER: JARVIS \u2714 (tap to change)" else "MAKE JARVIS THE CALL MANAGER (recommended)"
         roleBtn = voiceButton(roleLabel()) {
@@ -347,7 +327,6 @@ class MainActivity : AppCompatActivity() {
             })
             addView(callModeBtn)
             addView(callDelayBtn)
-            addView(callKeyBtn)
             addView(roleBtn)
             addView(callTestBtn)
             addView(waCheckBtn)

@@ -321,8 +321,6 @@ class CallAssistService : Service() {
         showAlert()
         if (!announced) {
             announced = true
-            val body = JSONObject().put("number", callerNumber).put("name", callerName).put("mode", mode(this))
-            Thread { LaptopApi.call(applicationContext, "POST", "/call/incoming", body) }.start()
             if (mode(this) == "auto") handler.postDelayed(autoAnswer, delaySec() * 1000L)
         }
     }
@@ -406,6 +404,11 @@ class CallAssistService : Service() {
     fun answer() {
         if (!ringing) return
         handler.removeCallbacks(autoAnswer)
+        if (!canUsePrivateSpeechRecognition()) {
+            showAlert()
+            android.widget.Toast.makeText(this, "On-device speech recognition is unavailable. Please answer normally.", android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
         if (waMode) {
             try {
                 waAnswer?.send()
@@ -427,10 +430,7 @@ class CallAssistService : Service() {
             tm.acceptRingingCall()
             jarvisAnswered = true
         } catch (e: SecurityException) {
-            Thread {
-                LaptopApi.call(applicationContext, "POST", "/call/incoming",
-                    JSONObject().put("name", "(allow Phone calls permission for Jarvis Control)"))
-            }.start()
+            android.widget.Toast.makeText(this, "Allow Phone calls permission to let Jarvis handle calls.", android.widget.Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
         }
         cancelAlert()
@@ -494,14 +494,20 @@ class CallAssistService : Service() {
         val mine = PendingIntent.getService(this, 12, Intent(this, CallAssistService::class.java).setAction(ACT_MINE), flags)
         val dec = PendingIntent.getService(this, 13, Intent(this, CallAssistService::class.java).setAction(ACT_DECLINE), flags)
         val auto = mode(this) == "auto"
-        val n = NotificationCompat.Builder(this, CH_ALERT)
+        val canAssist = canUsePrivateSpeechRecognition()
+        val builder = NotificationCompat.Builder(this, CH_ALERT)
             .setSmallIcon(android.R.drawable.sym_action_call)
             .setContentTitle("Call from $who")
-            .setContentText(if (auto) "Jarvis answers in ${delaySec()} s unless you tap I'll answer" else "Let Jarvis answer this call?")
+            .setContentText(
+                if (!canAssist) "On-device speech recognition unavailable. Answer normally."
+                else if (auto) "Jarvis answers in ${delaySec()} s unless you tap I'll answer"
+                else "Let Jarvis answer this call?"
+            )
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setOngoing(true)
-            .addAction(0, "Let Jarvis handle", ans)
+        if (canAssist) builder.addAction(0, "Let Jarvis handle", ans)
+        val n = builder
             .addAction(0, "Talk myself", mine)
             .addAction(0, "Decline", dec)
             .build()
@@ -559,15 +565,12 @@ class CallAssistService : Service() {
         try { tts?.stop() } catch (e: Exception) { }
         try { recognizer?.destroy() } catch (e: Exception) { }
         recognizer = null
-        CallEar.stop = true
         if (!testing) setSpeaker(false)
         MicService.pauseMic(false)
         val who = if (testing) "Test call" else if (callerName.isNotBlank()) callerName else if (callerNumber.isNotBlank()) callerNumber else "Unknown number"
         val num = if (testing) "test" else callerNumber
         val secs = (System.currentTimeMillis() - startMs) / 1000
         val h = ArrayList(history)
-        val viaLaptop = usedLaptop
-        val cid = callId
         Thread {
             val summary = CallBrain.finish(applicationContext, who, num, secs, h)
             try {
@@ -580,11 +583,6 @@ class CallAssistService : Service() {
                     .build()
                 getSystemService(NotificationManager::class.java).notify((System.currentTimeMillis() % 100000).toInt() + 100, n)
             } catch (e: Exception) { }
-            val body = JSONObject().put("who", who).put("summary", summary)
-            if (viaLaptop) LaptopApi.call(applicationContext, "POST", "/call/end",
-                JSONObject().put("call_id", cid).put("number", num).put("name", who).put("seconds", secs), 8000)
-            else if (LaptopApi.paired(applicationContext)) LaptopApi.call(applicationContext, "POST", "/phone_notification",
-                JSONObject().put("app", "Jarvis Calls").put("title", "Call from $who").put("text", summary).put("key", "call-$cid"), 5000)
         }.start()
         testing = false
         jarvisAnswered = false
@@ -605,41 +603,21 @@ class CallAssistService : Service() {
         }
     }
 
-    /** Own microphone recording + Gemini speech-to-text: works even when Android silences the Google recognizer during calls. */
-    private fun listenEar() {
-        if (!inSession) return
-        Thread {
-            val r = CallEar.capture()
-            handler.post {
-                if (!inSession) return@post
-                when {
-                    r.failed || r.dead -> { earBroken = true; listen() }
-                    r.wav == null -> heardNothing(SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
-                    else -> Thread {
-                        val t = CallBrain.transcribe(applicationContext, r.wav)
-                        handler.post {
-                            if (!inSession) return@post
-                            when {
-                                t == null -> { errors++; if (errors > 6) heardNothing(SpeechRecognizer.ERROR_NETWORK) else listenEar() }
-                                t.isBlank() -> heardNothing(SpeechRecognizer.ERROR_NO_MATCH)
-                                else -> heard(t)
-                            }
-                        }
-                    }.start()
-                }
-            }
-        }.start()
-    }
+    private fun canUsePrivateSpeechRecognition(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
 
     private fun listen() {
         if (!inSession) return
-        if (!earBroken && CallBrain.hasGemini(this)) { listenEar(); return }
+        if (!canUsePrivateSpeechRecognition()) {
+            speak("On-device speech recognition is unavailable. I cannot safely handle this call. Goodbye.", "final", TextToSpeech.QUEUE_FLUSH)
+            return
+        }
         try { recognizer?.destroy() } catch (e: Exception) { }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             speak("Sorry, I can't listen right now. Please call back later. Goodbye.", "final", TextToSpeech.QUEUE_FLUSH)
             return
         }
-        val r = SpeechRecognizer.createSpeechRecognizer(this)
+        val r = SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
         recognizer = r
         r.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(p: Bundle?) {}
@@ -691,11 +669,6 @@ class CallAssistService : Service() {
         }
         val filler = Runnable { if (inSession) speak("One moment.", "filler", TextToSpeech.QUEUE_ADD) }
         handler.postDelayed(filler, 3500)
-        val body = JSONObject()
-            .put("call_id", callId)
-            .put("text", text)
-            .put("number", if (testing) "test" else callerNumber)
-            .put("name", if (testing) "Test call" else callerName)
         history.add(Pair("caller", text))
         val snapshot = ArrayList(history)
         Thread {
@@ -705,11 +678,6 @@ class CallAssistService : Service() {
             if (local != null) {
                 reply = local.first
                 end = local.second
-            } else if (LaptopApi.paired(applicationContext)) {
-                val r = LaptopApi.call(applicationContext, "POST", "/call/turn", body, 60000)
-                reply = r.optString("reply", "")
-                end = r.optBoolean("end", false)
-                if (reply.isNotBlank()) usedLaptop = true
             }
             handler.post {
                 handler.removeCallbacks(filler)

@@ -7,6 +7,16 @@ android {
     namespace 'com.jarvis.control'
     compileSdk 34
 
+    // One fixed debug key for every build, so a new build can always install over the old one.
+    signingConfigs {
+        debug {
+            storeFile file('jarvis-debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
     defaultConfig {
         applicationId "com.jarvis.control"
         minSdk 26
@@ -16,6 +26,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
         }

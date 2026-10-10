@@ -83,8 +83,6 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         prefs = getSharedPreferences("jarvis_control", MODE_PRIVATE)
-        // Remove the legacy call-only Gemini credential without touching unrelated settings.
-        prefs.edit().remove("call_gemini_key").commit()
 
         val savedToken = prefs.getString("token", null) ?: generateToken().also {
             prefs.edit().putString("token", it).apply()

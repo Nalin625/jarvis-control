@@ -141,6 +141,7 @@ class CallAssistService : Service() {
     val handler = Handler(Looper.getMainLooper())
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    private var privateTtsReady = false
     private var pendingSpeech: Triple<String, String, Int>? = null
     private var recognizer: SpeechRecognizer? = null
     private var audio: AudioManager? = null
@@ -200,8 +201,15 @@ class CallAssistService : Service() {
         tts = TextToSpeech(this) { status ->
             val t = tts
             if (status == TextToSpeech.SUCCESS && t != null) {
-                val r = t.setLanguage(Locale.getDefault())
-                if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) t.setLanguage(Locale.US)
+                // Never send call replies to a network-backed TTS engine.
+                val offlineVoice = t.voices
+                    ?.firstOrNull { !it.isNetworkConnectionRequired && it.locale.language == Locale.getDefault().language }
+                    ?: t.voices?.firstOrNull { !it.isNetworkConnectionRequired }
+                if (offlineVoice == null || t.setVoice(offlineVoice) != TextToSpeech.SUCCESS) {
+                    ttsReady = false
+                    privateTtsReady = false
+                    return@TextToSpeech
+                }
                 t.setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -214,6 +222,7 @@ class CallAssistService : Service() {
                     override fun onError(id: String?) { handler.post { spoken(id ?: "") } }
                 })
                 ttsReady = true
+                privateTtsReady = true
                 pendingSpeech?.let { speak(it.first, it.second, it.third); pendingSpeech = null }
             }
         }
@@ -404,9 +413,9 @@ class CallAssistService : Service() {
     fun answer() {
         if (!ringing) return
         handler.removeCallbacks(autoAnswer)
-        if (!canUsePrivateSpeechRecognition()) {
+        if (!canUsePrivateCallAssistant()) {
             showAlert()
-            android.widget.Toast.makeText(this, "On-device speech recognition is unavailable. Please answer normally.", android.widget.Toast.LENGTH_LONG).show()
+            android.widget.Toast.makeText(this, "Offline speech input/output is unavailable. Please answer normally.", android.widget.Toast.LENGTH_LONG).show()
             return
         }
         if (waMode) {
@@ -494,7 +503,7 @@ class CallAssistService : Service() {
         val mine = PendingIntent.getService(this, 12, Intent(this, CallAssistService::class.java).setAction(ACT_MINE), flags)
         val dec = PendingIntent.getService(this, 13, Intent(this, CallAssistService::class.java).setAction(ACT_DECLINE), flags)
         val auto = mode(this) == "auto"
-        val canAssist = canUsePrivateSpeechRecognition()
+        val canAssist = canUsePrivateCallAssistant()
         val builder = NotificationCompat.Builder(this, CH_ALERT)
             .setSmallIcon(android.R.drawable.sym_action_call)
             .setContentTitle("Call from $who")
@@ -590,7 +599,7 @@ class CallAssistService : Service() {
 
     private fun speak(text: String, id: String, queue: Int) {
         val t = tts
-        if (t == null || !ttsReady) { pendingSpeech = Triple(text, id, queue); return }
+        if (t == null || !ttsReady || !privateTtsReady) return
         t.speak(text, queue, Bundle(), id)
     }
 
@@ -606,10 +615,13 @@ class CallAssistService : Service() {
     private fun canUsePrivateSpeechRecognition(): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
 
+    private fun canUsePrivateCallAssistant(): Boolean =
+        canUsePrivateSpeechRecognition() && privateTtsReady
+
     private fun listen() {
         if (!inSession) return
-        if (!canUsePrivateSpeechRecognition()) {
-            speak("On-device speech recognition is unavailable. I cannot safely handle this call. Goodbye.", "final", TextToSpeech.QUEUE_FLUSH)
+        if (!canUsePrivateCallAssistant()) {
+            speak("On-device speech recognition or offline speech output is unavailable. Please answer normally.", "final", TextToSpeech.QUEUE_FLUSH)
             return
         }
         try { recognizer?.destroy() } catch (e: Exception) { }

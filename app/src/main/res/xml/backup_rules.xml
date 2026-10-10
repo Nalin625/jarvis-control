@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Preserve all unrelated app data; keep local call history on this device only. -->
+    <exclude domain="file" path="calls.json" />
+</full-backup-content>

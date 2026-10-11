@@ -52,6 +52,9 @@ class GestureService : LifecycleService() {
         /** Pointer mode: the index finger moves the laptop mouse, a pinch presses it. */
         @Volatile var pointerMode = false
 
+        /** On while the gesture screen records a sign: nothing is sent to the laptop, and the pointer is released. */
+        @Volatile var training = false
+
         /** Set by the gesture screen to get each frame's hand (null = no hand). Called on the main thread. */
         @Volatile var onHand: ((List<FloatArray>?) -> Unit)? = null
 
@@ -136,6 +139,7 @@ class GestureService : LifecycleService() {
         running = false
         sendToLaptop = false
         pointerMode = false
+        training = false
         onHand = null
         videoOn = false
         onVideo = null
@@ -264,8 +268,12 @@ class GestureService : LifecycleService() {
     private fun onFrame(hand: List<FloatArray>?, hands: List<HandPacket>) {
         val cb = onHand
         if (cb != null) main.post { cb(hand) }
-        if (pointerMode) sendTrack(hand, hands)
-        if (!sendToLaptop) return
+        if (pointerMode) {
+            // While a sign is being recorded the pointer gets "no fingertip", which releases any held mouse button,
+            // so the hand cannot move or click the laptop during training.
+            if (training) sendTrack(null, emptyList()) else sendTrack(hand, hands)
+        }
+        if (!sendToLaptop || training) return
         val label = if (hand != null) GestureTrainer.shared(this).classify(hand).first else null
         if (label != null && label == lastLabel) {
             streak++

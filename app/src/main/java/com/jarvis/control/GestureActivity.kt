@@ -13,14 +13,18 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
- * Teach JARVIS your gestures, see what the camera and the laptop are doing,
- * and turn the camera and the laptop pointer on or off.
+ * Shows the hand gestures the laptop workspace understands, lets you see what the camera and the laptop
+ * are doing, turns the camera and laptop control on or off, and (separately) teaches custom signs for the
+ * laptop's older gesture map.
  */
 class GestureActivity : AppCompatActivity() {
 
@@ -28,6 +32,15 @@ class GestureActivity : AppCompatActivity() {
         private const val RECORD_MS = 3000L        // a sign is kept for this long
         private const val GET_READY_MS = 1000L     // a count-in before it is kept
         private const val MAX_RECORD_FRAMES = 120  // enough clear frames; more adds nothing
+        private const val CAPTURE_WINDOW_MS = 1000L // a corner is the average of the last second of still fingertips
+        private const val CALIB_INTRO = "Calibration teaches the laptop how far your hand must move to reach the whole screen. " +
+            "Press CALIBRATE THE REACH, then point at four corners."
+        private val CORNER_HINTS = listOf(
+            "Point with your index finger at the TOP LEFT of the space you can reach comfortably. Hold still, then press CAPTURE.",
+            "Now the TOP RIGHT corner. Hold still, then press CAPTURE.",
+            "Now the BOTTOM RIGHT corner. Hold still, then press CAPTURE.",
+            "Now the BOTTOM LEFT corner. Hold still, then press CAPTURE."
+        )
     }
 
     /** One line of the action list: the action, its box on screen, and the text that says what it needs. */
@@ -38,6 +51,7 @@ class GestureActivity : AppCompatActivity() {
     private lateinit var handLine: TextView
     private lateinit var pointerLine: TextView
     private lateinit var laptopLine: TextView
+    private lateinit var linkLine: TextView
     private lateinit var cameraBtn: Button
     private lateinit var sendBtn: Button
     private lateinit var pointerBtn: Button
@@ -50,6 +64,25 @@ class GestureActivity : AppCompatActivity() {
     private lateinit var testInfo: TextView
     private lateinit var cameraView: HandCameraView
     private lateinit var videoBtn: Button
+    private lateinit var tuneText: TextView
+    private lateinit var tuneNote: TextView
+    private lateinit var sensDownBtn: Button
+    private lateinit var sensUpBtn: Button
+    private lateinit var dwellDownBtn: Button
+    private lateinit var dwellUpBtn: Button
+    private lateinit var resetBtn: Button
+    private lateinit var calibText: TextView
+    private lateinit var calibStartBtn: Button
+    private lateinit var calibCaptureBtn: Button
+    private lateinit var calibCancelBtn: Button
+    private lateinit var calibSaveBtn: Button
+    private var laptopTuning: JSONObject? = null     // the laptop's settings as it last reported them (null until read)
+    private var tuneBusy = false                     // one change at a time: the buttons wait for the laptop's answer
+    private var calibrating = false
+    private val calibPoints = ArrayList<CalibrationBox.Point>()
+    private val recentTips = ArrayList<Pair<Long, CalibrationBox.Point>>()   // index tips seen while calibrating
+    private var calibOk: CalibrationBox.Result.Ok? = null     // a box that passed the checks, waiting to be saved
+    private var calibMessage = ""
     private var visible = false
     private var actions: List<MapAction> = emptyList()
     private var places: List<String> = emptyList()
@@ -59,6 +92,15 @@ class GestureActivity : AppCompatActivity() {
     private var collecting = false                // true during the seconds that are kept
     private val recordFrames = ArrayList<List<FloatArray>>()
     private val handler = Handler(Looper.getMainLooper())
+
+    /** Refreshes the link line once a second while this screen is open. onPause removes it. */
+    private val linkTicker = object : Runnable {
+        override fun run() {
+            if (!visible) return
+            refreshLink()
+            handler.postDelayed(this, 1000L)
+        }
+    }
     private var testing = false
     private var lastTest = 0L
     private var handSeen: Boolean? = null
@@ -128,7 +170,7 @@ class GestureActivity : AppCompatActivity() {
             setPadding(dp(16), dp(18), dp(16), dp(28))
         }
         root.addView(txt("JARVIS GESTURES", 26f, "#4FE3FF", bold = true))
-        root.addView(txt("Your phone camera watches your hand. Only the gesture name goes to the laptop.", 15f, "#9FB8C6"))
+        root.addView(txt("Your phone camera watches your hand. Hand positions go to the laptop only while Laptop control is ON.", 15f, "#9FB8C6"))
 
         // 0. My camera: what the phone sees, with your hand outlined
         val mine = card("MY CAMERA: WHAT JARVIS SEES")
@@ -148,28 +190,67 @@ class GestureActivity : AppCompatActivity() {
         handLine = txt("", 18f)
         pointerLine = txt("", 16f)
         laptopLine = txt("", 16f)
+        linkLine = txt("", 14f, "#9FB8C6")
         now.addView(cameraLine)
         now.addView(handLine)
         now.addView(pointerLine)
         now.addView(laptopLine)
+        now.addView(linkLine)
         cameraBtn = btn("START CAMERA") { toggleCamera() }
         now.addView(cameraBtn)
         now.addView(txt("A notification stays up while the camera is on.", 13f, "#9FB8C6"))
         root.addView(now)
 
-        // 2. Settings: each button says whether it is on
+        // 2. The workspace gestures: what the laptop does with each one
+        val guide = card("GESTURES FOR THE LAPTOP WORKSPACE")
+        guide.addView(txt(GestureGuide.intro, 14f, "#9FB8C6"))
+        for (g in GestureGuide.items) {
+            guide.addView(txt(g.name, 16f, "#E8F7FF", bold = true))
+            guide.addView(txt(g.how, 14f, "#9FB8C6"))
+        }
+        root.addView(guide)
+
+        // 3. Settings: each button says whether it is on
         val settings = card("SETTINGS")
         sendBtn = btn("") { toggleSend() }
         pointerBtn = btn("") { togglePointer() }
         settings.addView(sendBtn)
         settings.addView(pointerBtn)
-        settings.addView(txt("Pointer: point with your index finger to move the laptop mouse. Pinch to click. Make a fist to pause, open palm to resume.", 14f, "#9FB8C6"))
+        settings.addView(txt("Laptop control sends your hand to the laptop, so the workspace pointer follows it. Your laptop's mouse only moves when its workspace is closed and its 'mouse when closed' setting is on.", 14f, "#9FB8C6"))
         settings.addView(btn("CHECK THE LAPTOP") { checkLaptop() })
         root.addView(settings)
 
-        // 3. Teach each action: pick it, then record its sign for 3 seconds
-        val teach = card("1 · TEACH EACH ACTION")
-        teach.addView(txt("Pick an action from the list. Press RECORD, then do its hand sign for 3 seconds, holding it still in view. Turn on Show my video to see your hand while you record.", 15f, "#9FB8C6"))
+        // 3b. Tune the pointer. The laptop keeps the values; this screen asks it to change them and shows its answer.
+        val tune = card("TUNE THE POINTER")
+        tune.addView(txt("Sensitivity: how far the pointer moves for a hand movement. Dwell: how long to hold still over a card to pick it. Reach: the part of your camera picture that covers the whole screen. The laptop saves these.", 14f, "#9FB8C6"))
+        tuneText = txt("", 15f)
+        tune.addView(tuneText)
+        sensDownBtn = btn("SENSITIVITY  -") { stepSensitivity(false) }
+        sensUpBtn = btn("SENSITIVITY  +") { stepSensitivity(true) }
+        dwellDownBtn = btn("DWELL  -") { stepDwell(false) }
+        dwellUpBtn = btn("DWELL  +") { stepDwell(true) }
+        tune.addView(pairRow(sensDownBtn, sensUpBtn))
+        tune.addView(pairRow(dwellDownBtn, dwellUpBtn))
+        resetBtn = btn("RESET SENSITIVITY, DWELL AND REACH") { resetTuning() }
+        tune.addView(resetBtn)
+        tuneNote = txt("", 14f, "#9FB8C6")
+        tune.addView(tuneNote)
+
+        calibText = txt("", 15f)
+        tune.addView(calibText)
+        calibStartBtn = btn("CALIBRATE THE REACH") { startCalibration() }
+        calibCaptureBtn = btn("CAPTURE") { captureCorner() }
+        calibCancelBtn = btn("CANCEL CALIBRATION") { cancelCalibration() }
+        calibSaveBtn = btn("SAVE THE REACH TO THE LAPTOP") { saveReach() }
+        tune.addView(calibStartBtn)
+        tune.addView(calibCaptureBtn)
+        tune.addView(calibCancelBtn)
+        tune.addView(calibSaveBtn)
+        root.addView(tune)
+
+        // 4. Custom signs: optional, for the laptop's older gesture map. The workspace gestures above do not use them.
+        val teach = card("CUSTOM SIGNS (OPTIONAL)")
+        teach.addView(txt("These signs run the actions in the laptop's gesture map. The workspace gestures above do not use them. Pick an action from the list. Press RECORD, then do its hand sign for 3 seconds, holding it still in view. Turn on Show my video to see your hand while you record.", 15f, "#9FB8C6"))
         placeBtn = btn("") { cyclePlace() }
         teach.addView(placeBtn)
         teach.addView(txt("The place is where you are. The same sign can do a different action in each place, so one sign can cover several actions.", 13f, "#9FB8C6"))
@@ -199,10 +280,10 @@ class GestureActivity : AppCompatActivity() {
         root.addView(teach)
 
         // 4. Test it
-        val test = card("2 · TEST IT")
-        testInfo = txt("Press TEST MY GESTURES, then show a sign to the camera.", 18f)
+        val test = card("TEST A CUSTOM SIGN")
+        testInfo = txt("Press TEST A SIGN, then show a custom sign to the camera.", 18f)
         test.addView(testInfo)
-        testBtn = btn("TEST MY GESTURES") { toggleTest() }
+        testBtn = btn("TEST A SIGN") { toggleTest() }
         test.addView(testBtn)
         root.addView(test)
 
@@ -213,6 +294,8 @@ class GestureActivity : AppCompatActivity() {
         refreshPlace()
         refreshRows()
         refreshButtons()
+        refreshTuning()
+        refreshCalib()
         checkLaptop()          // one request when the screen opens; nothing repeats by itself
     }
 
@@ -223,6 +306,7 @@ class GestureActivity : AppCompatActivity() {
         GestureService.onStatus = { _, _ -> refreshButtons() }
         GestureService.onVideo = { pic, hand, sure -> showVideo(pic, hand, sure) }
         applyVideo()
+        handler.post(linkTicker)
     }
 
     override fun onPause() {
@@ -238,8 +322,11 @@ class GestureActivity : AppCompatActivity() {
         recordFrames.clear()
         GestureService.training = false
         recordBtn.isEnabled = true
+        calibrating = false                    // leaving the screen ends a calibration: nothing half-saved
+        recentTips.clear()
+        refreshCalib()
         testing = false
-        testBtn.text = "TEST MY GESTURES"
+        testBtn.text = "TEST A SIGN"
         handSeen = null
     }
 
@@ -284,15 +371,26 @@ class GestureActivity : AppCompatActivity() {
         val send = prefs.getBoolean("gesture_send", false)
         sendBtn.text = "Send gestures to the laptop:  " + (if (send) "ON" else "OFF")
         val pointer = prefs.getBoolean("gesture_pointer", false)
-        pointerBtn.text = "Laptop pointer (index finger):  " + (if (pointer) "ON" else "OFF")
+        pointerBtn.text = "Laptop control:  " + (if (pointer) "ON" else "OFF")
         setLine(cameraLine, "Camera", GestureService.status["camera"] ?: "Off")
         if (handSeen == null) setLine(handLine, "Hand", "Waiting for the camera")
-        setLine(pointerLine, "Pointer", when {
-            !pointer -> "Off"
+        setLine(pointerLine, "Laptop control", when {
+            !pointer -> GestureGuide.laptopControlOff
             !GestureService.running -> "On, but the camera is off. Press START CAMERA."
-            else -> "On. Your index finger moves the laptop mouse."
+            else -> GestureGuide.laptopControlOn
         })
         setLine(laptopLine, "Laptop", GestureService.status["laptop"] ?: "Not checked yet")
+        refreshLink()
+    }
+
+    /** The phone's view of the link: packets, round trips, timeouts, and how often a hand was in view. */
+    private fun refreshLink() {
+        val pointer = prefs.getBoolean("gesture_pointer", false)
+        setLine(linkLine, "Link", when {
+            !pointer -> "Off. Turn Laptop control on to send your hand."
+            !GestureService.running -> "Waiting for the camera."
+            else -> describeLink(GestureService.linkStats.summary())
+        })
     }
 
     private fun toggleCamera() = setCamera(!GestureService.running)
@@ -335,15 +433,227 @@ class GestureActivity : AppCompatActivity() {
         refreshButtons()
         Thread {
             val reply = LaptopApi.call(this, "GET", "/gesture/track/status", null, 3000)
-            val noHelper = "Connected, but the laptop has no mouse helper. On the laptop run:  sudo apt install xdotool"
             val msg = when {
                 reply.has("error") -> reply.optString("error")
-                !reply.optBoolean("xdotool", true) -> noHelper
-                else -> "Connected. The laptop can move the pointer."
+                // The workspace pointer needs no extra program; only the laptop's mouse helper does.
+                !reply.optBoolean("xdotool", true) ->
+                    "Connected. The laptop's mouse helper (xdotool) is not installed, so its mouse cannot move. The workspace still works."
+                else -> "Connected to the laptop."
             }
             GestureService.status["laptop"] = msg
-            runOnUiThread { refreshButtons() }
+            // The laptop's tuning, as it holds it now (one more request, same press).
+            val tuning = LaptopApi.call(this, "GET", "/gesture/settings", null, 3000)
+            runOnUiThread {
+                tuning.optJSONObject("settings")?.let { laptopTuning = it }
+                if (tuning.optJSONObject("settings") == null) {
+                    showTuneNote("Could not read the laptop's settings. " + tuning.optString("error", "Press CHECK THE LAPTOP to try again."))
+                }
+                refreshButtons()
+                refreshTuning()
+            }
         }.start()
+    }
+
+    // ----- Tuning: the laptop keeps the values. The phone asks for a change and shows the laptop's answer. -----
+
+    private fun showTuneNote(text: String) {
+        tuneNote.text = text
+    }
+
+    /** Shows the laptop's values. The buttons wait until they are known and no change is in flight. */
+    private fun refreshTuning() {
+        val s = laptopTuning
+        tuneText.text = if (s == null) {
+            "Laptop settings: not read yet. Press CHECK THE LAPTOP."
+        } else {
+            buildString {
+                append("Pointer sensitivity: ").append(Tuning.oneDecimal(s.optDouble("sensitivity", Tuning.SENS_DEFAULT)))
+                append("  (0.5 steadier ... 2.0 quicker)")
+                append("\nDwell: ").append(Tuning.oneDecimal(s.optDouble("dwell_s", Tuning.DWELL_DEFAULT))).append(" seconds to hold still")
+                append("\nReach across the picture: ").append(spanText(s.optJSONArray("reach_x")))
+                append("\nReach up and down: ").append(spanText(s.optJSONArray("reach_y")))
+                if (s.optBoolean("locked")) append("\nThe laptop's workspace is LOCKED. Press L on the laptop to unlock it.")
+            }
+        }
+        val ready = laptopTuning != null && !tuneBusy
+        for (b in listOf(sensDownBtn, sensUpBtn, dwellDownBtn, dwellUpBtn, resetBtn)) b.isEnabled = ready
+        refreshCalib()
+    }
+
+    private fun spanText(a: JSONArray?): String =
+        if (a == null || a.length() != 2) "not set" else "${Tuning.percent(a.optDouble(0))} to ${Tuning.percent(a.optDouble(1))}"
+
+    private fun stepSensitivity(up: Boolean) {
+        val cur = laptopTuning?.optDouble("sensitivity", Double.NaN) ?: Double.NaN
+        if (cur.isNaN()) {
+            showTuneNote("Read the laptop's settings first. Press CHECK THE LAPTOP.")
+            return
+        }
+        val next = Tuning.sensitivityStep(cur, up)
+        if (next == cur) {
+            showTuneNote(if (up) "Sensitivity is already at its quickest." else "Sensitivity is already at its steadiest.")
+            return
+        }
+        sendTuning(JSONObject().put("sensitivity", next), "sensitivity")
+    }
+
+    private fun stepDwell(up: Boolean) {
+        val cur = laptopTuning?.optDouble("dwell_s", Double.NaN) ?: Double.NaN
+        if (cur.isNaN()) {
+            showTuneNote("Read the laptop's settings first. Press CHECK THE LAPTOP.")
+            return
+        }
+        val next = Tuning.dwellStep(cur, up)
+        if (next == cur) {
+            showTuneNote(if (up) "Dwell is already at its longest." else "Dwell is already at its shortest.")
+            return
+        }
+        sendTuning(JSONObject().put("dwell_s", next), "dwell time")
+    }
+
+    /** Puts sensitivity, dwell and the reach back to the laptop's defaults. */
+    private fun resetTuning() {
+        val patch = JSONObject()
+            .put("sensitivity", Tuning.SENS_DEFAULT)
+            .put("dwell_s", Tuning.DWELL_DEFAULT)
+            .put("reach_x", JSONArray(listOf(Tuning.REACH_LO, Tuning.REACH_HI)))
+            .put("reach_y", JSONArray(listOf(Tuning.REACH_LO, Tuning.REACH_HI)))
+        sendTuning(patch, "the defaults")
+    }
+
+    /** One change to the laptop. The laptop checks it and answers; the screen shows that answer, never a guess. */
+    private fun sendTuning(patch: JSONObject, what: String, onDone: () -> Unit = {}) {
+        if (tuneBusy) return
+        tuneBusy = true
+        showTuneNote("Saving $what on the laptop...")
+        refreshTuning()
+        Thread {
+            val reply = LaptopApi.call(this, "POST", "/gesture/settings", patch, 3000)
+            runOnUiThread {
+                tuneBusy = false
+                if (reply.optBoolean("ok", false)) {
+                    reply.optJSONObject("settings")?.let { laptopTuning = it }
+                    showTuneNote(
+                        if (reply.optBoolean("saved", true)) "Saved on the laptop."
+                        else "In use now, but the laptop could not write it to its file, so it is lost when the laptop restarts."
+                    )
+                    onDone()
+                } else {
+                    showTuneNote(refusal(reply))
+                }
+                refreshTuning()
+            }
+        }.start()
+    }
+
+    /** The words for a refused change: the laptop's reasons when it gives them, otherwise what went wrong. */
+    private fun refusal(reply: JSONObject): String {
+        val list = reply.optJSONArray("errors")
+        if (list != null && list.length() > 0) return (0 until list.length()).joinToString("\n") { list.optString(it) }
+        val msg = reply.optString("error", "")
+        return if (msg.isNotEmpty()) msg else "The laptop did not accept the change. Press CHECK THE LAPTOP and try again."
+    }
+
+    /** Two buttons side by side, each taking half the width. */
+    private fun pairRow(left: Button, right: Button): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        for (b in listOf(left, right)) {
+            b.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                .apply { setMargins(dp(4), dp(10), dp(4), 0) }
+            addView(b)
+        }
+    }
+
+    // ----- Calibration: four corners of the space the finger can reach. The box is checked before it is saved. -----
+
+    private fun startCalibration() {
+        calibrating = true
+        calibPoints.clear()
+        recentTips.clear()
+        calibOk = null
+        calibMessage = ""
+        if (!GestureService.running) setCamera(true)     // the corners come from the camera; it may ask for permission
+        refreshCalib()
+    }
+
+    private fun cancelCalibration() {
+        calibrating = false
+        calibPoints.clear()
+        recentTips.clear()
+        calibMessage = "Calibration cancelled. Nothing was changed."
+        refreshCalib()
+    }
+
+    /** CAPTURE: the last second of still fingertip frames becomes the next corner. */
+    private fun captureCorner() {
+        if (!GestureService.running) {
+            calibMessage = "The camera is off. Press START CAMERA, then capture again."
+            refreshCalib()
+            return
+        }
+        val now = System.currentTimeMillis()
+        val samples = recentTips.filter { now - it.first <= CAPTURE_WINDOW_MS }.map { it.second }
+        val got = CalibrationBox.capture(samples)
+        when (got) {
+            is CalibrationBox.Capture.TooFew ->
+                calibMessage = "I can't see your index finger well enough. Show it to the camera, then capture again."
+            is CalibrationBox.Capture.Moving ->
+                calibMessage = "Your finger moved while I was looking. Hold it still for a second, then capture."
+            is CalibrationBox.Capture.Got -> {
+                calibPoints.add(got.at)
+                calibMessage = ""
+                if (calibPoints.size == CalibrationBox.CORNERS) finishCalibration()
+            }
+        }
+        refreshCalib()
+    }
+
+    private fun finishCalibration() {
+        calibrating = false
+        recentTips.clear()
+        when (val r = CalibrationBox.fromCorners(calibPoints.toList(), mirror = true)) {
+            is CalibrationBox.Result.Ok -> {
+                calibOk = r
+                calibMessage = ""
+            }
+            is CalibrationBox.Result.Refused -> {
+                calibOk = null
+                calibMessage = r.reasons.joinToString("\n") + "\nTo calibrate again, press CALIBRATE THE REACH."
+            }
+        }
+    }
+
+    /** Sends the checked box to the laptop. Nothing is sent unless the box passed the checks. */
+    private fun saveReach() {
+        val ok = calibOk ?: return
+        val patch = JSONObject()
+            .put("reach_x", JSONArray(listOf(ok.xLo, ok.xHi)))
+            .put("reach_y", JSONArray(listOf(ok.yLo, ok.yHi)))
+        sendTuning(patch, "the reach") {
+            calibOk = null
+            calibMessage = "The laptop uses this reach now."
+            refreshCalib()
+        }
+    }
+
+    /** Shows the calibration step, the buttons that go with it, and any box waiting to be saved. */
+    private fun refreshCalib() {
+        val ok = calibOk
+        calibStartBtn.visibility = if (calibrating) View.GONE else View.VISIBLE
+        calibCaptureBtn.visibility = if (calibrating) View.VISIBLE else View.GONE
+        calibCancelBtn.visibility = if (calibrating) View.VISIBLE else View.GONE
+        calibSaveBtn.visibility = if (ok != null && !calibrating) View.VISIBLE else View.GONE
+        calibSaveBtn.isEnabled = !tuneBusy
+        calibCaptureBtn.text = "CAPTURE CORNER ${calibPoints.size + 1} OF ${CalibrationBox.CORNERS}"
+        calibText.text = when {
+            calibrating -> CORNER_HINTS[calibPoints.size] +
+                "\nCorners captured: ${calibPoints.size} of ${CalibrationBox.CORNERS}." +
+                (if (calibMessage.isEmpty()) "" else "\n$calibMessage")
+            ok != null -> "The reach box is ready. Across the picture: ${Tuning.percent(ok.xLo)} to ${Tuning.percent(ok.xHi)}. " +
+                "Up and down: ${Tuning.percent(ok.yLo)} to ${Tuning.percent(ok.yHi)}. Save it to the laptop, or calibrate again."
+            calibMessage.isNotEmpty() -> calibMessage
+            else -> CALIB_INTRO
+        }
     }
 
     // ----- Places: the phone sends the place with each sign, and the laptop picks the action from it -----
@@ -477,7 +787,7 @@ class GestureActivity : AppCompatActivity() {
 
     private fun toggleTest() {
         testing = !testing
-        testBtn.text = if (testing) "STOP TEST" else "TEST MY GESTURES"
+        testBtn.text = if (testing) "STOP TEST" else "TEST A SIGN"
         if (testing && !GestureService.running) setCamera(true)
         testInfo.text = if (testing) "Show a sign to the camera." else "Test stopped."
     }
@@ -499,6 +809,13 @@ class GestureActivity : AppCompatActivity() {
         if (seen != handSeen) {                       // only redraw when it changes
             handSeen = seen
             setLine(handLine, "Hand", if (seen) "Seen" else "Not seen")
+        }
+        if (calibrating && hand != null && hand.size > 8) {
+            // Landmark 8 is the index fingertip. Keep only the last second of them for the next CAPTURE.
+            val tip = hand[8]
+            val now = System.currentTimeMillis()
+            recentTips.add(now to CalibrationBox.Point(tip[0].toDouble(), tip[1].toDouble()))
+            recentTips.removeAll { now - it.first > CAPTURE_WINDOW_MS }
         }
         if (recording != null) {
             if (collecting) {

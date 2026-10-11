@@ -43,13 +43,19 @@ object LaptopApi {
         return !p.getString("laptop_ip", "").isNullOrEmpty() && !p.getString("laptop_token", "").isNullOrEmpty()
     }
 
-    /** Returns the JSON reply, or {"error": "..."} - never throws. */
+    /**
+     * Returns the JSON reply, or {"error": "...", "kind": "..."} - never throws.
+     * "kind" says why it failed, so the screens can count it: "not_paired", "timeout" (no answer in time),
+     * "unreachable" (could not connect), "bad_reply" (the answer was not JSON), "server" (the laptop answered with an error).
+     */
     fun call(ctx: Context, method: String, path: String, body: JSONObject? = null, timeoutMs: Int = 4000): JSONObject {
         val p = ctx.getSharedPreferences("jarvis_control", Context.MODE_PRIVATE)
         val ip = host(ctx)
         val port = p.getString("laptop_port", "8899") ?: "8899"
         val tok = p.getString("laptop_token", "") ?: ""
-        if (ip.isEmpty() || tok.isEmpty()) return JSONObject().put("error", "Not connected. Tap Find my laptop first.")
+        if (ip.isEmpty() || tok.isEmpty()) {
+            return JSONObject().put("error", "Not connected. Tap Find my laptop first.").put("kind", "not_paired")
+        }
         return try {
             val c = URL("http://$ip:$port$path").openConnection() as HttpURLConnection
             c.requestMethod = method
@@ -64,9 +70,17 @@ object LaptopApi {
             val stream = if (c.responseCode in 200..299) c.inputStream else c.errorStream
             val text = stream?.bufferedReader()?.readText() ?: "{}"
             c.disconnect()
-            try { JSONObject(text) } catch (e: Exception) { JSONObject().put("error", "bad reply from laptop") }
+            val reply = try {
+                JSONObject(text)
+            } catch (e: Exception) {
+                return JSONObject().put("error", "bad reply from laptop").put("kind", "bad_reply")
+            }
+            if (reply.has("error") && !reply.has("kind")) reply.put("kind", "server")
+            reply
+        } catch (e: java.net.SocketTimeoutException) {
+            JSONObject().put("error", "The laptop did not answer in time.").put("kind", "timeout")
         } catch (e: Exception) {
-            JSONObject().put("error", "Can't reach the laptop ($ip). Same WiFi? Laptop on?")
+            JSONObject().put("error", "Can't reach the laptop ($ip). Same WiFi? Laptop on?").put("kind", "unreachable")
         }
     }
 

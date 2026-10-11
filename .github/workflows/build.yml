@@ -16,15 +16,23 @@ jobs:
         with:
           gradle-version: '8.7'
       - name: Fetch hand-tracking model
+        # Gradle module is app/, so its assets folder is app/src/main/assets/.
         run: |
-          mkdir -p app/app/src/main/assets
-          curl -fL -o app/app/src/main/assets/hand_landmarker.task \
+          mkdir -p app/src/main/assets
+          curl -fL --retry 3 -o app/src/main/assets/hand_landmarker.task \
             https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+          test -s app/src/main/assets/hand_landmarker.task
+          ls -l app/src/main/assets/hand_landmarker.task
 
       - name: Build debug APK
         run: |
           set -o pipefail
           gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log
+
+      - name: Verify the hand model is inside the APK
+        # Fails the build if the model is not packaged, instead of shipping an app that
+        # cannot start hand tracking.
+        run: python3 tools/check_apk_model.py app/build/outputs/apk/debug/*.apk
       - name: Show errors on the run page
         if: failure()
         run: |

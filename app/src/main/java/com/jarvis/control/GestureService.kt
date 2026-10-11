@@ -49,7 +49,7 @@ class GestureService : LifecycleService() {
         @Volatile var running = false
         @Volatile var starting = false
         @Volatile var sendToLaptop = false
-        /** Pointer mode: the index finger moves the laptop mouse, a pinch presses it. */
+        /** Laptop control (the "gesture_pointer" setting): hand positions are sent to the laptop, which moves the workspace pointer. */
         @Volatile var pointerMode = false
 
         /** On while the gesture screen records a sign: nothing is sent to the laptop, and the pointer is released. */
@@ -69,6 +69,9 @@ class GestureService : LifecycleService() {
 
         /** The latest status lines: "camera" (what the phone camera is doing) and "laptop" (what the laptop said). */
         val status = ConcurrentHashMap<String, String>()
+
+        /** The phone's own counts for the link to the laptop: frames, packets, replies, timeouts, round trips. */
+        val linkStats = TrackStats()
 
         fun start(ctx: Context) {
             ContextCompat.startForegroundService(ctx, Intent(ctx, GestureService::class.java))
@@ -266,6 +269,7 @@ class GestureService : LifecycleService() {
     }
 
     private fun onFrame(hand: List<FloatArray>?, hands: List<HandPacket>) {
+        linkStats.onFrame(hand != null)
         val cb = onHand
         if (cb != null) main.post { cb(hand) }
         if (pointerMode) {
@@ -289,13 +293,17 @@ class GestureService : LifecycleService() {
         }
     }
 
-    /** Pointer mode: the index fingertip moves the laptop mouse; a pinch presses it. About 10 frames a second.
+    /** Laptop control: every hand's landmarks go to the laptop, which moves the workspace pointer (the index tip) and
+     *  works out the gestures. About 10 frames a second.
      *  Sends the old one-hand fields AND protocol v2 ("v": 2, every hand's 21 landmarks), so an older laptop
      *  server keeps working and a newer one can use both hands. */
     private fun sendTrack(hand: List<FloatArray>?, hands: List<HandPacket>) {
         val now = System.currentTimeMillis()
         if (now - lastTrackSent < 100L) return
-        if (!trackBusy.compareAndSet(false, true)) return      // the last frame is still on its way
+        if (!trackBusy.compareAndSet(false, true)) {           // the last frame is still on its way: this one is dropped
+            linkStats.onBusyDrop()
+            return
+        }
         lastTrackSent = now
         val body = JSONObject()
         if (hand != null && hand.size >= 21) {
@@ -334,15 +342,22 @@ class GestureService : LifecycleService() {
                 .put("lm", marks))
         }
         body.put("hands", list)
+        // The phone's own counts ride along, so the laptop can show both ends of the link.
+        body.put("diag", JSONObject(linkStats.diag()))
+        linkStats.onSent(now)
+        val sentAt = System.currentTimeMillis()
         trackExec.execute {
             try {
                 val reply = LaptopApi.call(this, "POST", "/gesture/track", body, 1500)
+                val rtt = System.currentTimeMillis() - sentAt
+                linkStats.onReply(rtt, if (reply.has("error")) reply.optString("kind", "server") else null)
                 if (reply.has("error")) {
                     say("laptop", "Pointer: " + reply.optString("error"))
                 } else {
                     say("laptop", "Pointer: " + reply.optString("note", "ok"))
                 }
             } catch (e: Exception) {
+                linkStats.onReply(System.currentTimeMillis() - sentAt, "unreachable")
                 say("laptop", "Pointer: no reply from the laptop")
             } finally {
                 trackBusy.set(false)

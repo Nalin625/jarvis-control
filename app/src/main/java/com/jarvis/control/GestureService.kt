@@ -55,6 +55,12 @@ class GestureService : LifecycleService() {
         /** Set by the gesture screen to hear about status changes. Called on the main thread. */
         @Volatile var onStatus: ((String, String) -> Unit)? = null
 
+        /** On only while the gesture screen is open and "Show my video" is on. Frames then carry a small picture. */
+        @Volatile var videoOn = false
+
+        /** Called on the main thread about 10 times a second while videoOn: the picture, the hand and how sure. */
+        @Volatile var onVideo: ((Bitmap?, List<FloatArray>?, Float) -> Unit)? = null
+
         /** The latest status lines: "camera" (what the phone camera is doing) and "laptop" (what the laptop said). */
         val status = ConcurrentHashMap<String, String>()
 
@@ -81,6 +87,9 @@ class GestureService : LifecycleService() {
     private var lastTrackSent = 0L
     private var pinching = false
     private var failed = false
+    /** Small pictures of the frames sent to the hand tracker, oldest first. Each result takes the oldest one. */
+    private val pictures = java.util.concurrent.ConcurrentLinkedDeque<Bitmap>()
+    private var lastVideoPost = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -122,6 +131,9 @@ class GestureService : LifecycleService() {
         sendToLaptop = false
         pointerMode = false
         onHand = null
+        videoOn = false
+        onVideo = null
+        pictures.clear()
         if (!failed) {
             status["camera"] = "Off"
             main.post { onStatus?.invoke("camera", "Off") }
@@ -157,6 +169,14 @@ class GestureService : LifecycleService() {
                 lastScore = result.handedness().firstOrNull()?.firstOrNull()?.score() ?: 0f
                 val hand = result.landmarks().firstOrNull()?.map { floatArrayOf(it.x(), it.y(), it.z()) }
                 onFrame(hand)
+                // the picture of this same frame (results come back in the order the frames were sent)
+                val pic: Bitmap? = pictures.pollFirst()
+                val now = SystemClock.uptimeMillis()
+                if (videoOn && now - lastVideoPost >= 100L) {
+                    lastVideoPost = now
+                    val sure = lastScore
+                    main.post { onVideo?.invoke(pic, hand, sure) }
+                }
             }
             .setErrorListener { e -> say("camera", "Hand tracking error: ${e.message}") }
             .build()
@@ -194,12 +214,28 @@ class GestureService : LifecycleService() {
             var ts = SystemClock.uptimeMillis()
             if (ts <= lastTs) ts = lastTs + 1
             lastTs = ts
-            landmarker?.detectAsync(BitmapImageBuilder(upright).build(), ts)
+            if (videoOn) {
+                pictures.addLast(smallPicture(upright))
+                while (pictures.size > 4) pictures.pollFirst()
+            }
+            try {
+                landmarker?.detectAsync(BitmapImageBuilder(upright).build(), ts)
+            } catch (e: Exception) {
+                pictures.pollLast()             // no result will come for this frame
+                throw e
+            }
         } catch (e: Exception) {
             // skip this frame
         } finally {
             frame.close()
         }
+    }
+
+    /** A small copy of the frame for the gesture screen, about 320 pixels wide. */
+    private fun smallPicture(src: Bitmap): Bitmap {
+        val w = minOf(320, src.width)
+        val h = (src.height * w / src.width).coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(src, w, h, true)
     }
 
     private fun onFrame(hand: List<FloatArray>?) {

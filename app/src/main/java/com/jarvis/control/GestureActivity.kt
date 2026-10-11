@@ -2,6 +2,7 @@ package com.jarvis.control
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -35,6 +36,9 @@ class GestureActivity : AppCompatActivity() {
     private lateinit var testBtn: Button
     private lateinit var testInfo: TextView
     private lateinit var listText: TextView
+    private lateinit var cameraView: HandCameraView
+    private lateinit var videoBtn: Button
+    private var visible = false
     private var recording: String? = null
     private var recordLeft = 0
     private var testing = false
@@ -75,10 +79,18 @@ class GestureActivity : AppCompatActivity() {
             .apply { setMargins(0, dp(10), 0, 0) }
     }
 
+    /** Glass: a see-through cyan panel with a thin cyan edge. */
+    private fun glass(): GradientDrawable = GradientDrawable().apply {
+        orientation = GradientDrawable.Orientation.TL_BR
+        colors = intArrayOf(Color.parseColor("#331B9FBF"), Color.parseColor("#0C0A1826"))
+        cornerRadius = dp(20).toFloat()
+        setStroke(dp(1), Color.parseColor("#664FE3FF"))
+    }
+
     private fun card(title: String): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(16), dp(14), dp(16), dp(16))
-        background = panel("#0B1B28", "#2A6F86")
+        background = glass()
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             .apply { setMargins(0, dp(14), 0, 0) }
         addView(txt(title, 13f, "#4FE3FF", bold = true))
@@ -94,6 +106,18 @@ class GestureActivity : AppCompatActivity() {
         }
         root.addView(txt("JARVIS GESTURES", 26f, "#4FE3FF", bold = true))
         root.addView(txt("Your phone camera watches your hand. Only the gesture name goes to the laptop.", 15f, "#9FB8C6"))
+
+        // 0. My camera: what the phone sees, with your hand outlined
+        val mine = card("MY CAMERA: WHAT JARVIS SEES")
+        cameraView = HandCameraView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(300))
+                .apply { setMargins(0, dp(10), 0, 0) }
+        }
+        mine.addView(cameraView)
+        videoBtn = btn("") { toggleVideo() }
+        mine.addView(videoBtn)
+        mine.addView(txt("Your picture stays on this phone. The outline shows the joints the phone found in your hand. The ring on your index fingertip fills when you pinch.", 13f, "#9FB8C6"))
+        root.addView(mine)
 
         // 1. What is happening right now
         val now = card("RIGHT NOW")
@@ -162,15 +186,20 @@ class GestureActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        visible = true
         GestureService.onHand = { hand -> handleHand(hand) }
         GestureService.onStatus = { _, _ -> refreshButtons() }
-        refreshButtons()
+        GestureService.onVideo = { pic, hand, sure -> showVideo(pic, hand, sure) }
+        applyVideo()
     }
 
     override fun onPause() {
         super.onPause()
+        visible = false
         GestureService.onHand = null
         GestureService.onStatus = null
+        GestureService.onVideo = null
+        applyVideo()
         recording = null
         testing = false
         testBtn.text = "TEST MY GESTURES"
@@ -181,8 +210,39 @@ class GestureActivity : AppCompatActivity() {
         tv.text = "$name:  $value"
     }
 
+    /** The phone sends pictures only while this screen is open and "Show my video" is on. */
+    private fun applyVideo() {
+        GestureService.videoOn = visible && prefs.getBoolean("gesture_video", true)
+        refreshButtons()
+    }
+
+    private fun toggleVideo() {
+        val on = !prefs.getBoolean("gesture_video", true)
+        prefs.edit().putBoolean("gesture_video", on).apply()
+        applyVideo()
+    }
+
+    /** Called on the main thread about 10 times a second while the video is on. */
+    private fun showVideo(pic: Bitmap?, hand: List<FloatArray>?, sure: Float) {
+        val name = if (hand != null) trainer.classify(hand).first else null
+        cameraView.update(pic, hand, sure, name)
+    }
+
     /** Redraws the buttons and the RIGHT NOW lines from the phone's current status. */
     private fun refreshButtons() {
+        val video = prefs.getBoolean("gesture_video", true)
+        videoBtn.text = "Show my video:  " + (if (video) "ON" else "OFF")
+        when {
+            !GestureService.running -> {
+                cameraView.clear()
+                cameraView.message = "Camera is off. Press START CAMERA."
+            }
+            !video -> {
+                cameraView.clear()
+                cameraView.message = "Video is off. The camera still watches your hand."
+            }
+            else -> cameraView.message = "Waiting for your hand..."
+        }
         cameraBtn.text = if (GestureService.running) "STOP CAMERA" else "START CAMERA"
         val send = prefs.getBoolean("gesture_send", false)
         sendBtn.text = "Send gestures to the laptop:  " + (if (send) "ON" else "OFF")

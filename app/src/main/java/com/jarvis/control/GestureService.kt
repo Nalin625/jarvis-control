@@ -161,8 +161,16 @@ class GestureService : LifecycleService() {
     }
 
     private fun buildLandmarker() {
+        // The hand model is a file in app/src/main/assets. If it was not built into the app, MediaPipe fails with a
+        // cryptic message, so check first and say plainly what to do.
+        val model = "hand_landmarker.task"
+        try {
+            assets.open(model).close()
+        } catch (e: java.io.IOException) {
+            throw IllegalStateException("The hand model is missing from the app. Put $model in app/src/main/assets and build again.")
+        }
         val options = HandLandmarker.HandLandmarkerOptions.builder()
-            .setBaseOptions(BaseOptions.builder().setModelAssetPath("hand_landmarker.task").build())
+            .setBaseOptions(BaseOptions.builder().setModelAssetPath(model).build())
             .setRunningMode(RunningMode.LIVE_STREAM)
             .setNumHands(1)
             .setResultListener { result, _ ->

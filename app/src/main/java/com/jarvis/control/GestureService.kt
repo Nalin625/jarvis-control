@@ -30,6 +30,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
+/** One hand from the tracker: its side ("Left"/"Right"), how sure it is, and its 21 landmarks (x, y, z). */
+private class HandPacket(val handedness: String, val score: Float, val lm: List<FloatArray>)
+
 /**
  * Watches the front camera for your hand, on the phone only. Matches it against your trained gestures
  * and sends just the gesture NAME to the laptop. No images leave the phone.
@@ -90,6 +93,9 @@ class GestureService : LifecycleService() {
     /** Small pictures of the frames sent to the hand tracker, oldest first. Each result takes the oldest one. */
     private val pictures = java.util.concurrent.ConcurrentLinkedDeque<Bitmap>()
     private var lastVideoPost = 0L
+    /** Names this run of the camera for the laptop, so a restart is not mistaken for old packets. */
+    private val trackSession = java.util.UUID.randomUUID().toString().take(12)
+    private var trackSeq = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -172,11 +178,20 @@ class GestureService : LifecycleService() {
         val options = HandLandmarker.HandLandmarkerOptions.builder()
             .setBaseOptions(BaseOptions.builder().setModelAssetPath(model).build())
             .setRunningMode(RunningMode.LIVE_STREAM)
-            .setNumHands(1)
+            .setNumHands(2)
             .setResultListener { result, _ ->
-                lastScore = result.handedness().firstOrNull()?.firstOrNull()?.score() ?: 0f
-                val hand = result.landmarks().firstOrNull()?.map { floatArrayOf(it.x(), it.y(), it.z()) }
-                onFrame(hand)
+                // Every hand the tracker found (at most two), with its side and how sure it is.
+                val hands = result.landmarks().mapIndexed { i, marks ->
+                    val side = result.handedness().getOrNull(i)?.firstOrNull()
+                    HandPacket(
+                        side?.categoryName() ?: "",
+                        side?.score() ?: 0f,
+                        marks.map { floatArrayOf(it.x(), it.y(), it.z()) }
+                    )
+                }
+                lastScore = hands.firstOrNull()?.score ?: 0f
+                val hand = hands.firstOrNull()?.lm
+                onFrame(hand, hands)
                 // the picture of this same frame (results come back in the order the frames were sent)
                 val pic: Bitmap? = pictures.pollFirst()
                 val now = SystemClock.uptimeMillis()
@@ -246,10 +261,10 @@ class GestureService : LifecycleService() {
         return Bitmap.createScaledBitmap(src, w, h, true)
     }
 
-    private fun onFrame(hand: List<FloatArray>?) {
+    private fun onFrame(hand: List<FloatArray>?, hands: List<HandPacket>) {
         val cb = onHand
         if (cb != null) main.post { cb(hand) }
-        if (pointerMode) sendTrack(hand)
+        if (pointerMode) sendTrack(hand, hands)
         if (!sendToLaptop) return
         val label = if (hand != null) GestureTrainer.shared(this).classify(hand).first else null
         if (label != null && label == lastLabel) {
@@ -266,8 +281,10 @@ class GestureService : LifecycleService() {
         }
     }
 
-    /** Pointer mode: the index fingertip moves the laptop mouse; a pinch presses it. About 10 frames a second. */
-    private fun sendTrack(hand: List<FloatArray>?) {
+    /** Pointer mode: the index fingertip moves the laptop mouse; a pinch presses it. About 10 frames a second.
+     *  Sends the old one-hand fields AND protocol v2 ("v": 2, every hand's 21 landmarks), so an older laptop
+     *  server keeps working and a newer one can use both hands. */
+    private fun sendTrack(hand: List<FloatArray>?, hands: List<HandPacket>) {
         val now = System.currentTimeMillis()
         if (now - lastTrackSent < 100L) return
         if (!trackBusy.compareAndSet(false, true)) return      // the last frame is still on its way
@@ -291,6 +308,24 @@ class GestureService : LifecycleService() {
             body.put("pinch", false)
             body.put("conf", 0.0)
         }
+        // Protocol v2: every hand, with landmarks rounded to 3 decimals. The laptop does the pinch and identity work.
+        trackSeq += 1
+        body.put("v", 2)
+        body.put("session", trackSession)
+        body.put("seq", trackSeq)
+        val list = org.json.JSONArray()
+        for (h in hands.take(2)) {
+            val marks = org.json.JSONArray()
+            for (p in h.lm) {
+                marks.put(org.json.JSONArray().put(round3(p[0])).put(round3(p[1])).put(round3(p[2])))
+            }
+            list.put(JSONObject()
+                .put("handedness", h.handedness)
+                .put("score", h.score.toDouble())
+                .put("label", GestureTrainer.shared(this).classify(h.lm).first ?: "")
+                .put("lm", marks))
+        }
+        body.put("hands", list)
         trackExec.execute {
             try {
                 val reply = LaptopApi.call(this, "POST", "/gesture/track", body, 1500)
@@ -312,6 +347,8 @@ class GestureService : LifecycleService() {
         val dy = a[1] - b[1]
         return kotlin.math.sqrt(dx * dx + dy * dy)
     }
+
+    private fun round3(v: Float): Double = Math.round(v * 1000f) / 1000.0
 
     /** Sends only the gesture name. The laptop decides what it does (see /gesture on the laptop). */
     private fun send(label: String) {

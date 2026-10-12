@@ -30,6 +30,11 @@ import java.util.Collections
 import android.os.Handler
 import android.os.Looper
 import kotlin.random.Random
+import android.animation.ArgbEvaluator
+import android.os.PowerManager
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
@@ -406,11 +411,28 @@ class MainActivity : AppCompatActivity() {
         else -> binding.setupColumn
     }
 
+    private val pageTitles = arrayOf("J.A.R.V.I.S", "DECK", "LINK", "CORE", "SETUP")
+
     /** Staggered fade/rise of a page's blocks, plus a springy pop of its tiles. */
     private fun enterPage(i: Int) {
         Fx.stagger(columnOf(i))
         val grid = when (i) { 0 -> homeGrid; 1 -> deckGrid; else -> null }
         if (grid != null) Fx.popIn(Fx.tilesOf(grid), 26L)
+        // the title decodes out of noise, and on Home the reactor spins up
+        firstText(columnOf(i))?.let { Fx.scramble(it, pageTitles[i]) }
+        if (i == 0) binding.reactorView.kick()
+    }
+
+    /** The first text label of a page (its title), found by walking the first children. */
+    private fun firstText(v: View): android.widget.TextView? {
+        if (v is android.widget.TextView) return v
+        if (v is android.view.ViewGroup) {
+            for (k in 0 until minOf(v.childCount, 2)) {
+                val found = firstText(v.getChildAt(k))
+                if (found != null) return found
+            }
+        }
+        return null
     }
 
     private fun showPage(i: Int, animate: Boolean = true) {
@@ -687,7 +709,6 @@ class MainActivity : AppCompatActivity() {
 
     /** Feature 3: a live strip on Home with the laptop's battery, load and IPs (refreshes every 30 s). */
     private var statusStrip: android.widget.TextView? = null
-    private var statusTicks = 0
 
     private fun buildStatusStrip() {
         val tv = android.widget.TextView(this).apply {
@@ -796,7 +817,7 @@ class MainActivity : AppCompatActivity() {
             val text = if (err.isNotEmpty()) err + tip else r.optString("response", "Done")
             runOnUiThread {
                 out.setTextColor(ContextCompat.getColor(this, if (err.isNotEmpty()) R.color.warning else R.color.text_primary))
-                out.text = "> $cmd\n$text" + if (err.isEmpty()) "\n\u2014 ${ms} ms" else ""
+                Fx.typeOn(out, "> $cmd\n$text" + if (err.isEmpty()) "\n\u2014 ${ms} ms" else "")
                 out.performHapticFeedback(
                     if (err.isEmpty()) android.view.HapticFeedbackConstants.VIRTUAL_KEY
                     else android.view.HapticFeedbackConstants.LONG_PRESS
@@ -901,22 +922,49 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------ connection health (while app is open)
     private val healthHandler = Handler(Looper.getMainLooper())
+    // one shared background thread for the health pings (no new thread every few seconds)
+    private val healthIo: ExecutorService = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "jarvis-health").apply { isDaemon = true }
+    }
+    private var healthBeat = 0
     private val healthTick = object : Runnable {
         override fun run() {
-            checkLaptopHealth()
-            if (statusTicks++ % 6 == 0) refreshStatusStrip()
+            val beat = healthBeat++
+            // laptop answering: check every 5 s. Not answering: back off to every 15 s so an idle phone stays quiet.
+            if (laptopOnline || beat % 3 == 0) checkLaptopHealth()
+            // the status strip makes the laptop do work, so refresh it about once a minute while it is up
+            if (laptopOnline && beat % 12 == 0) refreshStatusStrip()
             healthHandler.postDelayed(this, 5000)
         }
     }
+
+    /** Runs one health ping on the shared thread. Does nothing once the screen has closed. */
+    private fun pingInBackground(job: () -> Unit) {
+        try {
+            healthIo.execute { job() }
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            // the screen is gone; nothing to update
+        }
+    }
+
+    private fun powerSaver(): Boolean =
+        (getSystemService(POWER_SERVICE) as? PowerManager)?.isPowerSaveMode == true
 
     // ------------------------------------------------------------ hero (reactor + chips + stat tiles)
     private var laptopOnline = false
     private var aiOnline = false
 
     private fun setChip(view: android.widget.TextView, on: Boolean, warn: Boolean = false) {
-        view.setTextColor(
-            ContextCompat.getColor(this, if (on) R.color.success else if (warn) R.color.warning else R.color.text_dim)
-        )
+        val to = ContextCompat.getColor(this, if (on) R.color.success else if (warn) R.color.warning else R.color.text_dim)
+        if (view.currentTextColor == to) return
+        // the chip's text fades to its new colour instead of snapping there
+        (view.tag as? ValueAnimator)?.cancel()
+        val anim = ValueAnimator.ofObject(ArgbEvaluator(), view.currentTextColor, to).apply {
+            duration = 320
+            addUpdateListener { view.setTextColor(it.animatedValue as Int) }
+        }
+        view.tag = anim
+        anim.start()
     }
 
     private fun refreshHero() {
@@ -944,12 +992,29 @@ class MainActivity : AppCompatActivity() {
         val i = registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val level = i?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = i?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100) ?: 100
-        binding.statBattery.text = if (level >= 0 && scale > 0) "${level * 100 / scale}%" else "\u2014"
+        countUp(binding.statBattery, if (level >= 0 && scale > 0) "${level * 100 / scale}%" else "\u2014")
+    }
+
+    /** A stat tile's number counts up to its value, but only when the value has changed. */
+    private fun countUp(tv: android.widget.TextView, value: String) {
+        if (tv.text.toString() == value) return
+        val m = Regex("^(\\d+)(.*)$").find(value)
+        val target = m?.groupValues?.get(1)?.toIntOrNull()
+        if (m == null || target == null) { tv.text = value; return }
+        val suffix = m.groupValues[2]
+        (tv.tag as? ValueAnimator)?.cancel()
+        val anim = ValueAnimator.ofInt(0, target).apply {
+            duration = 420
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { tv.text = "${it.animatedValue}$suffix" }
+        }
+        tv.tag = anim
+        anim.start()
     }
 
     /** Ollama runs on this same phone (Termux), so "AI online" = port 11434 answers locally. */
     private fun checkAi() {
-        Thread {
+        pingInBackground {
             var up = false
             try {
                 val c = URL("http://127.0.0.1:11434/api/tags").openConnection() as HttpURLConnection
@@ -965,7 +1030,7 @@ class MainActivity : AppCompatActivity() {
                 aiOnline = up
                 refreshHero()
             }
-        }.start()
+        }
     }
 
     private fun checkLaptopHealth() {
@@ -975,13 +1040,13 @@ class MainActivity : AppCompatActivity() {
         if (ip.isEmpty()) {
             setStatus(binding.healthLabel, "Not connected", R.color.text_dim)
             laptopOnline = false
-            binding.statLatency.text = "\u2014"
+            countUp(binding.statLatency, "\u2014")
             binding.statLaptop.text = "\u2014"
             refreshHero()
             return
         }
         val port = prefs.getString("laptop_port", "8899") ?: "8899"
-        Thread {
+        pingInBackground {
             var ms = -1L
             val hostIp = LaptopApi.host(this).ifEmpty { ip }
             try {
@@ -997,15 +1062,15 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 if (isFinishing) return@runOnUiThread
                 laptopOnline = ms >= 0
-                binding.statLaptop.text = hostIp
-                binding.statLatency.text = if (ms >= 0) "$ms ms" else "\u2014"
+                if (binding.statLaptop.text.toString() != hostIp) binding.statLaptop.text = hostIp
+                countUp(binding.statLatency, if (ms >= 0) "$ms ms" else "\u2014")
                 val remoteIp = prefs.getString("laptop_ip_remote", "") ?: ""
                 val via = if (remoteIp.isNotEmpty() && hostIp == remoteIp && hostIp != ip) "  \u00B7  via INTERNET" else "  \u00B7  via WiFi"
                 if (ms >= 0) setStatus(binding.healthLabel, "Connected to $hostIp  \u00B7  $ms ms$via", R.color.success)
                 else setStatus(binding.healthLabel, "Laptop $hostIp not reachable (laptop on? Tailscale on?)", R.color.warning)
                 refreshHero()
             }
-        }.start()
+        }
     }
 
     // ------------------------------------------------------------ find + connect
@@ -1248,6 +1313,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun startScan() {
         scanAnim?.cancel()
+        // battery saver: no sweeping line, which saves a redraw on every frame
+        val saver = powerSaver()
+        binding.scanLine.visibility = if (saver) View.GONE else View.VISIBLE
+        if (saver) return
         val h = resources.displayMetrics.heightPixels.toFloat()
         val band = dpf(90f)
         scanAnim = ValueAnimator.ofFloat(-band, h).apply {
@@ -1263,6 +1332,12 @@ class MainActivity : AppCompatActivity() {
         super.onPause()
         healthHandler.removeCallbacks(healthTick)
         scanAnim?.cancel()
+    }
+
+    override fun onDestroy() {
+        healthHandler.removeCallbacks(healthTick)
+        healthIo.shutdownNow()
+        super.onDestroy()
     }
 
     private fun updateNotifAccessLabel() {
@@ -1310,8 +1385,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setStatus(view: android.widget.TextView, text: String, colorRes: Int) {
-        view.text = "\u25CF $text"
-        view.setTextColor(ContextCompat.getColor(this, colorRes))
+        // only touch the view when something changed: the health poll calls this every few seconds
+        val line = "\u25CF $text"
+        if (view.text.toString() != line) view.text = line
+        val col = ContextCompat.getColor(this, colorRes)
+        if (view.currentTextColor != col) view.setTextColor(col)
     }
 
     private fun updateButtons() {

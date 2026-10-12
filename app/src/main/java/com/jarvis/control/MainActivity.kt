@@ -12,6 +12,7 @@ import android.animation.ValueAnimator
 import android.view.View
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.LinearInterpolator
+import android.view.animation.OvershootInterpolator
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatDelegate
@@ -45,8 +46,11 @@ class MainActivity : AppCompatActivity() {
     private var callRoleBtn: android.widget.Button? = null
     private var scanAnim: ValueAnimator? = null
     private var deckResponse: android.widget.TextView? = null
-    private var homeGrid: android.widget.LinearLayout? = null
     private var deckGrid: android.widget.LinearLayout? = null
+    private val stack = ArrayList<View>()                 // the page on screen is the last one: a section, or a page opened from one
+    private val childPages = ArrayList<ChildPage>()
+    private val HUB_SECTIONS = intArrayOf(1, 5, 2, 3, 4)  // hub orb i opens this section (0 = the Hub itself)
+    private val TITLES = arrayOf("J.A.R.V.I.S", "DECK", "LINK", "CORE", "SETUP", "PHONE")
     private var historyRow: android.widget.LinearLayout? = null
 
     private val permissionLauncher = registerForActivityResult(
@@ -100,6 +104,10 @@ class MainActivity : AppCompatActivity() {
         binding.stopButton.setOnClickListener { stopJarvisService() }
         binding.saveTokenButton.setOnClickListener {
             val newToken = binding.tokenField.text.toString().trim()
+            if (newToken.isEmpty()) {
+                setStatus(binding.statusLabel, "Token can't be empty. Tap SAVE TOKEN with a value in the box.", R.color.warning)
+                return@setOnClickListener
+            }
             prefs.edit().putString("token", newToken).apply()
             setStatus(binding.statusLabel, "Token saved \u2014 restart the server for it to take effect", R.color.text_dim)
         }
@@ -371,21 +379,26 @@ class MainActivity : AppCompatActivity() {
         requestNeededPermissions()
         updateButtons()
 
-        // ---- pages: Home / Deck / Link / Core / Setup ----
-        buildHome()
+        // ---- pages: Hub (home, with five orbs), Deck, Link, Core, Setup and Phone ----
+        buildHub()
         buildStatusStrip()
         buildDeck()
+        buildPhone()
         buildThemeCard()
         buildRemoteCard()
-        binding.navBar.onSelect = { showPage(it) }
+        binding.backDeck.setOnClickListener { openSection(0) }
+        binding.backLink.setOnClickListener { openSection(0) }
+        binding.backCore.setOnClickListener { openSection(0) }
+        binding.backSetup.setOnClickListener { openSection(0) }
+        binding.backPhone.setOnClickListener { openSection(0) }
         pageIndex = savedInstanceState?.getInt("page") ?: 0
-        showPage(pageIndex, false)
+        stack.clear(); stack.add(pageViews()[pageIndex])
+        showView(pageViews()[pageIndex], null, 1, false, null) { }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (pageIndex != 0) showPage(0) else {
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
-                }
+                if (goBack()) return
+                isEnabled = false
+                onBackPressedDispatcher.onBackPressed()
             }
         })
         Fx.attachAll(binding.root)
@@ -401,163 +414,354 @@ class MainActivity : AppCompatActivity() {
     private fun dpf(v: Float) = v * resources.displayMetrics.density
 
     private fun pageViews(): List<View> =
-        listOf(binding.pageHome, binding.pageDeck, binding.pageLink, binding.pageCore, binding.pageSetup)
+        listOf(binding.pageHome, binding.pageDeck, binding.pageLink, binding.pageCore, binding.pageSetup, binding.pagePhone)
+
+    private fun allPages(): List<View> = pageViews() + childPages.map { it.view }
 
     private fun columnOf(i: Int): android.view.ViewGroup = when (i) {
         0 -> binding.homeColumn
         1 -> binding.deckColumn
         2 -> binding.contentColumn
         3 -> binding.coreColumn
-        else -> binding.setupColumn
+        4 -> binding.setupColumn
+        else -> binding.phoneColumn
     }
 
-    private val pageTitles = arrayOf("J.A.R.V.I.S", "DECK", "LINK", "CORE", "SETUP")
+    private fun titleOf(i: Int): android.widget.TextView = when (i) {
+        0 -> binding.titleHome
+        1 -> binding.titleDeck
+        2 -> binding.titleLink
+        3 -> binding.titleCore
+        4 -> binding.titleSetup
+        else -> binding.titlePhone
+    }
 
-    /** Staggered fade/rise of a page's blocks, plus a springy pop of its tiles. */
+    /** A page opened from a card (a PHONE group). Built once, then shown and hidden. */
+    private class ChildPage(
+        val view: View,
+        val column: android.widget.LinearLayout,
+        val title: android.widget.TextView,
+        val grid: android.widget.LinearLayout,
+        val name: String
+    )
+
+    /** A group of phone tools, shown as one card on the PHONE page. */
+    private class PhoneGroup(val glyph: String, val title: String, val tiles: List<Tile>)
+
+    /** Stagger in a section's blocks, pop its tiles, and decode its title. */
     private fun enterPage(i: Int) {
         Fx.stagger(columnOf(i))
-        val grid = when (i) { 0 -> homeGrid; 1 -> deckGrid; else -> null }
-        if (grid != null) Fx.popIn(Fx.tilesOf(grid), 26L)
-        // the title decodes out of noise, and on Home the reactor spins up
-        firstText(columnOf(i))?.let { Fx.scramble(it, pageTitles[i]) }
+        if (i == 1) deckGrid?.let { Fx.popIn(Fx.tilesOf(it), 26L) }
+        Fx.scramble(titleOf(i), TITLES[i])
         if (i == 0) binding.reactorView.kick()
     }
 
-    /** The first text label of a page (its title), found by walking the first children. */
-    private fun firstText(v: View): android.widget.TextView? {
-        if (v is android.widget.TextView) return v
-        if (v is android.view.ViewGroup) {
-            for (k in 0 until minOf(v.childCount, 2)) {
-                val found = firstText(v.getChildAt(k))
-                if (found != null) return found
-            }
-        }
-        return null
+    /** Opens a top-level page: 0 = Hub, 1 = Deck, 2 = Link, 3 = Core, 4 = Setup, 5 = Phone. */
+    private fun showPage(i: Int, animate: Boolean = true) = openSection(i, animate, null)
+
+    private fun openSection(i: Int, animate: Boolean = true, pivot: Pair<Float, Float>? = null) {
+        val target = pageViews()[i]
+        val before = stack.lastOrNull()
+        val dir = if (i >= pageIndex) 1 else -1
+        stack.clear(); stack.add(target)
+        pageIndex = i
+        showView(target, before, dir, animate, pivot) { enterPage(i) }
     }
 
-    private fun showPage(i: Int, animate: Boolean = true) {
-        val pages = pageViews()
-        val old = pages[pageIndex]
-        val nw = pages[i]
-        val dir = if (i >= pageIndex) 1f else -1f
-        val same = old === nw
-        pageIndex = i
-        binding.navBar.select(i, animate)
+    /** Opens a group page from the PHONE page. Back returns to PHONE. */
+    private fun openChild(p: ChildPage) {
+        val before = stack.lastOrNull()
+        stack.add(p.view)
+        showView(p.view, before, 1, true, null) {
+            Fx.stagger(p.column)
+            Fx.popIn(Fx.tilesOf(p.grid), 26L)
+            Fx.scramble(p.title, p.name)
+        }
+    }
+
+    /** One level back: a group page returns to PHONE. False when already on the Hub (the system handles it). */
+    private fun goBack(): Boolean {
+        if (stack.size > 1) {
+            val old = stack.removeAt(stack.size - 1)
+            showView(stack.last(), old, -1, true, null) { enterPage(pageIndex) }
+            return true
+        }
+        if (pageIndex != 0) { openSection(0); return true }
+        return false
+    }
+
+    /**
+     * Moves the screen from [from] to [target]. [dir] is +1 going deeper and -1 going back. [pivot] makes the
+     * new page grow out of one point (the orb that was tapped). [enter] runs once the page is on screen.
+     */
+    private fun showView(target: View, from: View?, dir: Int, animate: Boolean, pivot: Pair<Float, Float>?, enter: () -> Unit) {
+        binding.hubOrbs.setActive(stack.last() === binding.pageHome)
         if (!animate) {
-            pages.forEachIndexed { k, v -> v.visibility = if (k == i) View.VISIBLE else View.GONE }
+            allPages().forEach { it.visibility = if (it === target) View.VISIBLE else View.GONE }
+            target.alpha = 1f; target.translationX = 0f; target.scaleX = 1f; target.scaleY = 1f
             return
         }
-        if (same) return
-        old.animate().cancel()
-        old.animate().alpha(0f).translationX(-dir * dpf(36f)).setDuration(140).withEndAction {
-            if (pages[pageIndex] !== old) {
-                old.visibility = View.GONE
-                old.alpha = 1f
-                old.translationX = 0f
-            }
-        }.start()
-        nw.animate().cancel()
-        nw.visibility = View.VISIBLE
-        nw.alpha = 0f
-        nw.translationX = dir * dpf(36f)
-        nw.animate().alpha(1f).translationX(0f).setStartDelay(90).setDuration(260)
-            .setInterpolator(DecelerateInterpolator()).start()
-        binding.pagesFrame.postDelayed({ enterPage(i) }, 90)
+        if (from === target) return
+        from?.let { old ->
+            old.animate().cancel()
+            old.animate().alpha(0f).translationX(-dir * dpf(36f)).setDuration(140).withEndAction {
+                old.visibility = if (old === stack.last()) View.VISIBLE else View.GONE
+                old.alpha = 1f; old.translationX = 0f
+            }.start()
+        }
+        target.animate().cancel()
+        target.visibility = View.VISIBLE
+        target.alpha = 0f
+        if (pivot != null) {
+            target.pivotX = pivot.first; target.pivotY = pivot.second
+            target.scaleX = 0.5f; target.scaleY = 0.5f
+            target.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(90).setDuration(420)
+                .setInterpolator(OvershootInterpolator(0.8f)).start()
+        } else {
+            target.scaleX = 1f; target.scaleY = 1f
+            target.translationX = dir * dpf(36f)
+            target.animate().alpha(1f).translationX(0f).setStartDelay(90).setDuration(260)
+                .setInterpolator(DecelerateInterpolator()).start()
+        }
+        binding.pagesFrame.postDelayed({ enter() }, 90)
     }
 
-    private fun buildHome() {
-        val tiles = listOf(
-            Tile("\uD83D\uDD90", "Gestures") { startActivity(Intent(this, GestureActivity::class.java)) },
-            Tile("\uD83C\uDF03", "Night lock") { startActivity(Intent(this, NightLockActivity::class.java)) },
-            Tile("\u26A1", "Server on") { startJarvisService() },
-            Tile("\u23F9", "Server off") { stopJarvisService() },
-            Tile("\uD83D\uDCE1", "Find laptop") { findAndConnect() },
-            Tile("\uD83D\uDDA5", "Remote") { startActivity(Intent(this, RemoteActivity::class.java)) },
-            Tile("\uD83E\uDDE0", "Start AI") { binding.startAiButton.performClick(); showPage(3) },
-            Tile("\uD83D\uDCFA", "Share screen") { binding.shareScreenButton.performClick() },
-            Tile("\uD83C\uDF99", "Mic access") { micPermLauncher.launch(Manifest.permission.RECORD_AUDIO) },
-            Tile("\uD83D\uDD14", "Notif access") { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
-            Tile("\uD83D\uDCDE", "Calls") {
-                showPage(2)
-                callCardView?.let { c ->
-                    binding.pageLink.postDelayed({ c.requestRectangleOnScreen(android.graphics.Rect(0, 0, c.width, c.height), false) }, 400)
-                }
-            },
-            Tile("\uD83D\uDD17", "Pair") { showPage(2) },
-            Tile("\uD83D\uDDC2", "Laptop deck") { showPage(1) },
-            Tile("\uD83D\uDCCB", "Paste to laptop") { pasteToLaptop() },
-            Tile("\uD83D\uDCCA", "Laptop status") { showPage(1); sendDeck("status report") },
-            Tile("\uD83C\uDFA8", "Theme") { toggleTheme() },
-            Tile("\u2699", "Setup") { showPage(4) },
-            // ---- Phone tools (PhoneTools.kt) ----
-            Tile("\ud83d\udd26", "Flashlight") { phoneResult(PhoneTools.flashlight(this)) },
-            Tile("\ud83d\udcf3", "Buzz") { phoneResult(PhoneTools.buzz(this)) },
-            Tile("\ud83d\udd0b", "Battery") { phoneResult(PhoneTools.battery(this)) },
-            Tile("\ud83d\udcbe", "Storage") { phoneResult(PhoneTools.storage(this)) },
-            Tile("\u2139", "Phone info") { phoneResult(PhoneTools.info(this)) },
-            Tile("\ud83d\udcf6", "Wi-Fi settings") { phoneResult(PhoneTools.openWifi(this)) },
-            Tile("\ud83d\udd35", "Bluetooth") { phoneResult(PhoneTools.openBluetooth(this)) },
-            Tile("\ud83c\udf19", "Do not disturb") { phoneResult(PhoneTools.openDnd(this)) },
-            Tile("\ud83d\udcf7", "Camera") { phoneResult(PhoneTools.openCamera(this)) },
-            Tile("\ud83d\udcdc", "Call log") { phoneResult(PhoneTools.openCallLog(this)) },
-            Tile("\ud83d\udde3", "Last call") { showPhoneText("Last call", PhoneTools.lastCall(this)) },
-            Tile("\ud83d\udcce", "Copy last call") { phoneResult(PhoneTools.copyLastCall(this)) },
-            Tile("\ud83d\udd0a", "Music volume +") { phoneResult(PhoneTools.musicVolumeUp(this)) },
-            // ---- Phone tools 2 ----
-            Tile("\uD83D\uDD06", "Brightness +") { phoneResult(PhoneTools2.brightnessUp(this)) },
-            Tile("\uD83D\uDD05", "Brightness -") { phoneResult(PhoneTools2.brightnessDown(this)) },
-            Tile("\uD83D\uDD04", "Auto-rotate") { phoneResult(PhoneTools2.autoRotate(this)) },
-            Tile("\uD83D\uDDA5", "Display settings") { phoneResult(PhoneTools2.displaySettings(this)) },
-            Tile("\uD83C\uDF9A", "Sound settings") { phoneResult(PhoneTools2.soundSettings(this)) },
-            Tile("\uD83D\uDC41", "Keep screen on") { phoneResult(PhoneTools2.keepScreenOn(this)) },
-            Tile("\u2708", "Airplane mode") { phoneResult(PhoneTools2.airplaneMode(this)) },
-            Tile("\uD83D\uDCF2", "Hotspot") { phoneResult(PhoneTools2.hotspot(this)) },
-            Tile("\uD83D\uDCCD", "Location settings") { phoneResult(PhoneTools2.locationSettings(this)) },
-            Tile("\u267F", "Accessibility") { phoneResult(PhoneTools2.accessibilitySettings(this)) },
-            Tile("\uD83D\uDD52", "Date & time") { phoneResult(PhoneTools2.dateTimeSettings(this)) },
-            Tile("\uD83E\uDDE9", "App info") { phoneResult(PhoneTools2.appInfo(this)) },
-            Tile("\u23F0", "Clock app") { phoneResult(PhoneTools2.openClock(this)) },
-            Tile("\u23F3", "Timer app") { phoneResult(PhoneTools2.openTimers(this)) },
-            Tile("\u23F2", "1-min timer") { phoneResult(PhoneTools2.oneMinuteTimer(this)) },
-            Tile("\uD83D\uDCC5", "Calendar") { phoneResult(PhoneTools2.openCalendar(this)) },
-            Tile("\uD83D\uDCDD", "Keep notes") { phoneResult(PhoneTools2.openKeep(this)) },
-            Tile("\uD83D\uDC64", "Contacts") { phoneResult(PhoneTools2.openContacts(this)) },
-            Tile("\uD83D\uDDBC", "Gallery") { phoneResult(PhoneTools2.openGallery(this)) },
-            Tile("\uD83D\uDDFA", "Maps") { phoneResult(PhoneTools2.openMaps(this)) },
-            Tile("\uD83C\uDFAC", "YouTube") { phoneResult(PhoneTools2.openYouTube(this)) },
-            Tile("\uD83D\uDCAC", "WhatsApp") { phoneResult(PhoneTools2.openWhatsApp(this)) },
-            Tile("\u2709", "Gmail") { phoneResult(PhoneTools2.openGmail(this)) },
-            Tile("\uD83C\uDFB5", "Music app") { phoneResult(PhoneTools2.openMusic(this)) },
-            Tile("\uD83E\uDDEE", "Calculator") { phoneResult(PhoneTools2.openCalculator(this)) },
-            Tile("\uD83D\uDCC1", "Files") { phoneResult(PhoneTools2.openFiles(this)) },
-            Tile("\u260E", "Dialer") { phoneResult(PhoneTools2.openDialer(this)) },
-            Tile("\uD83D\uDCE9", "New text") { phoneResult(PhoneTools2.newText(this)) },
-            Tile("\uD83D\uDCE7", "New email") { phoneResult(PhoneTools2.newEmail(this)) },
-            Tile("\uD83D\uDD0D", "Search clip") { phoneResult(PhoneTools2.searchClipboard(this)) },
-            Tile("\uD83C\uDF0D", "Open clip link") { phoneResult(PhoneTools2.openClipLink(this)) },
-            Tile("\uD83D\uDCF6", "Wi-Fi name") { phoneResult(PhoneTools2.wifiName(this)) },
-            Tile("\uD83C\uDF10", "Phone IP") { phoneResult(PhoneTools2.phoneIp(this)) },
-            Tile("\uD83D\uDCC4", "Copy IP") { phoneResult(PhoneTools2.copyIp(this)) },
-            Tile("\uD83D\uDD0C", "Network type") { phoneResult(PhoneTools2.networkType(this)) },
-            Tile("\uD83D\uDD70", "Uptime") { phoneResult(PhoneTools2.uptime()) },
-            Tile("\uD83D\uDD22", "App count") { showPhoneText("App count", PhoneTools2.appCount(this)) },
-            Tile("\uD83D\uDD15", "Notif status") { showPhoneText("Notifications", PhoneTools2.notifStatus(this)) },
-            Tile("\uD83D\uDCC6", "Copy date/time") { phoneResult(PhoneTools2.copyDateTime(this)) },
-            Tile("\uD83C\uDF0E", "World clock") { showPhoneText("World clock", PhoneTools2.worldClock()) },
-            Tile("\uD83C\uDFB2", "Random 1-100") { phoneResult(PhoneTools2.randomNumber()) },
-            Tile("\u2696", "Coin flip") { phoneResult(PhoneTools2.coinFlip()) },
-            Tile("\u2680", "Roll dice") { phoneResult(PhoneTools2.rollDice()) },
-            Tile("\u23F1", "Stopwatch") { phoneResult(PhoneTools2.stopwatch()) },
-            Tile("\uD83C\uDFC1", "Stopwatch lap") { phoneResult(PhoneTools2.stopwatchLap()) },
-            Tile("\uD83C\uDD98", "SOS flash") { phoneResult(PhoneTools2.flashSos(this)) },
-            Tile("\uD83D\uDC93", "Heartbeat buzz") { phoneResult(PhoneTools2.heartbeat(this)) },
-            Tile("\u270F", "Quick note") { PhoneTools2.quickNote(this) },
-            Tile("\uD83D\uDCE4", "Share app") { phoneResult(PhoneTools2.shareApp(this)) },
-            Tile("\uD83D\uDED2", "App store") { phoneResult(PhoneTools2.appStore(this)) }
+    /** The Hub: five orbs circle the reactor. Tapping one opens its page, growing out of that orb. */
+    private fun buildHub() {
+        binding.hubOrbs.onOrb = { idx ->
+            val frame = IntArray(2)
+            binding.pagesFrame.getLocationInWindow(frame)
+            val c = binding.hubOrbs.orbCentreInWindow(idx)
+            openSection(HUB_SECTIONS[idx], true, Pair(c[0] - frame[0], c[1] - frame[1]))
+        }
+    }
+
+    /** PHONE: the phone tools in eight groups. Each group is a card; tapping it opens that group's page. */
+    private fun buildPhone() {
+        val groups = listOf(
+            PhoneGroup("\uD83D\uDDA5", "LAPTOP", listOf(
+                Tile("\uD83D\uDDC2", "Laptop deck") { showPage(1) },
+                Tile("\uD83D\uDCCA", "Laptop status") { showPage(1); sendDeck("status report") },
+                Tile("\uD83D\uDCE1", "Find laptop") { findAndConnect() },
+                Tile("\uD83D\uDDA5", "Remote") { startActivity(Intent(this, RemoteActivity::class.java)) },
+                Tile("\uD83D\uDCCB", "Paste to laptop") { pasteToLaptop() },
+                Tile("\u26A1", "Server on") { startJarvisService() },
+                Tile("\u23F9", "Server off") { stopJarvisService() },
+                Tile("\uD83D\uDCFA", "Share screen") { binding.shareScreenButton.performClick() },
+                Tile("\uD83E\uDDE0", "Start AI") { binding.startAiButton.performClick(); showPage(3) },
+                Tile("\uD83D\uDCDE", "Calls") {
+                    showPage(2)
+                    callCardView?.let { c ->
+                        binding.pageLink.postDelayed({ c.requestRectangleOnScreen(android.graphics.Rect(0, 0, c.width, c.height), false) }, 400)
+                    }
+                },
+                Tile("\uD83D\uDD17", "Pair") { showPage(2) }
+            )),
+            PhoneGroup("\uD83D\uDD90", "GESTURE & ACCESS", listOf(
+                Tile("\uD83D\uDD90", "Gestures") { startActivity(Intent(this, GestureActivity::class.java)) },
+                Tile("\uD83C\uDF03", "Night lock") { startActivity(Intent(this, NightLockActivity::class.java)) },
+                Tile("\uD83C\uDF99", "Mic access") { micPermLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+                Tile("\uD83D\uDD14", "Notif access") { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
+                Tile("\uD83C\uDFA8", "Theme") { toggleTheme() },
+                Tile("\u2699", "Setup") { showPage(4) }
+            )),
+            PhoneGroup("\uD83D\uDCF1", "HARDWARE", listOf(
+                Tile("\ud83d\udd26", "Flashlight") { phoneResult(PhoneTools.flashlight(this)) },
+                Tile("\ud83d\udcf3", "Buzz") { phoneResult(PhoneTools.buzz(this)) },
+                Tile("\ud83d\udd0b", "Battery") { phoneResult(PhoneTools.battery(this)) },
+                Tile("\ud83d\udcbe", "Storage") { phoneResult(PhoneTools.storage(this)) },
+                Tile("\uD83D\uDD06", "Brightness +") { phoneResult(PhoneTools2.brightnessUp(this)) },
+                Tile("\uD83D\uDD05", "Brightness -") { phoneResult(PhoneTools2.brightnessDown(this)) },
+                Tile("\uD83D\uDD04", "Auto-rotate") { phoneResult(PhoneTools2.autoRotate(this)) },
+                Tile("\uD83D\uDC41", "Keep screen on") { phoneResult(PhoneTools2.keepScreenOn(this)) },
+                Tile("\uD83D\uDC93", "Heartbeat buzz") { phoneResult(PhoneTools2.heartbeat(this)) },
+                Tile("\uD83C\uDD98", "SOS flash") { phoneResult(PhoneTools2.flashSos(this)) },
+                Tile("\ud83d\udd0a", "Music volume +") { phoneResult(PhoneTools.musicVolumeUp(this)) },
+                Tile("\ud83d\udcf7", "Camera") { phoneResult(PhoneTools.openCamera(this)) }
+            )),
+            PhoneGroup("\u2699", "SETTINGS", listOf(
+                Tile("\ud83d\udcf6", "Wi-Fi settings") { phoneResult(PhoneTools.openWifi(this)) },
+                Tile("\ud83d\udd35", "Bluetooth") { phoneResult(PhoneTools.openBluetooth(this)) },
+                Tile("\ud83c\udf19", "Do not disturb") { phoneResult(PhoneTools.openDnd(this)) },
+                Tile("\uD83D\uDDA5", "Display settings") { phoneResult(PhoneTools2.displaySettings(this)) },
+                Tile("\uD83C\uDF9A", "Sound settings") { phoneResult(PhoneTools2.soundSettings(this)) },
+                Tile("\u2708", "Airplane mode") { phoneResult(PhoneTools2.airplaneMode(this)) },
+                Tile("\uD83D\uDCF2", "Hotspot") { phoneResult(PhoneTools2.hotspot(this)) },
+                Tile("\uD83D\uDCCD", "Location settings") { phoneResult(PhoneTools2.locationSettings(this)) },
+                Tile("\u267F", "Accessibility") { phoneResult(PhoneTools2.accessibilitySettings(this)) },
+                Tile("\uD83D\uDD52", "Date & time") { phoneResult(PhoneTools2.dateTimeSettings(this)) },
+                Tile("\uD83E\uDDE9", "App info") { phoneResult(PhoneTools2.appInfo(this)) }
+            )),
+            PhoneGroup("\uD83D\uDCAC", "COMMS", listOf(
+                Tile("\u260E", "Dialer") { phoneResult(PhoneTools2.openDialer(this)) },
+                Tile("\ud83d\udcdc", "Call log") { phoneResult(PhoneTools.openCallLog(this)) },
+                Tile("\ud83d\udde3", "Last call") { showPhoneText("Last call", PhoneTools.lastCall(this)) },
+                Tile("\ud83d\udcce", "Copy last call") { phoneResult(PhoneTools.copyLastCall(this)) },
+                Tile("\uD83D\uDCE9", "New text") { phoneResult(PhoneTools2.newText(this)) },
+                Tile("\uD83D\uDCE7", "New email") { phoneResult(PhoneTools2.newEmail(this)) },
+                Tile("\uD83D\uDCAC", "WhatsApp") { phoneResult(PhoneTools2.openWhatsApp(this)) },
+                Tile("\u2709", "Gmail") { phoneResult(PhoneTools2.openGmail(this)) },
+                Tile("\uD83D\uDC64", "Contacts") { phoneResult(PhoneTools2.openContacts(this)) },
+                Tile("\uD83D\uDD0D", "Search clip") { phoneResult(PhoneTools2.searchClipboard(this)) },
+                Tile("\uD83C\uDF0D", "Open clip link") { phoneResult(PhoneTools2.openClipLink(this)) }
+            )),
+            PhoneGroup("\uD83E\uDDE9", "APPS", listOf(
+                Tile("\uD83D\uDDBC", "Gallery") { phoneResult(PhoneTools2.openGallery(this)) },
+                Tile("\uD83D\uDDFA", "Maps") { phoneResult(PhoneTools2.openMaps(this)) },
+                Tile("\uD83C\uDFAC", "YouTube") { phoneResult(PhoneTools2.openYouTube(this)) },
+                Tile("\uD83C\uDFB5", "Music app") { phoneResult(PhoneTools2.openMusic(this)) },
+                Tile("\uD83E\uDDEE", "Calculator") { phoneResult(PhoneTools2.openCalculator(this)) },
+                Tile("\uD83D\uDCC1", "Files") { phoneResult(PhoneTools2.openFiles(this)) },
+                Tile("\uD83D\uDCC5", "Calendar") { phoneResult(PhoneTools2.openCalendar(this)) },
+                Tile("\uD83D\uDCDD", "Keep notes") { phoneResult(PhoneTools2.openKeep(this)) },
+                Tile("\uD83D\uDED2", "App store") { phoneResult(PhoneTools2.appStore(this)) },
+                Tile("\uD83D\uDCE4", "Share app") { phoneResult(PhoneTools2.shareApp(this)) },
+                Tile("\uD83D\uDD22", "App count") { showPhoneText("App count", PhoneTools2.appCount(this)) }
+            )),
+            PhoneGroup("\u23F1", "TIME & FUN", listOf(
+                Tile("\u23F0", "Clock app") { phoneResult(PhoneTools2.openClock(this)) },
+                Tile("\u23F3", "Timer app") { phoneResult(PhoneTools2.openTimers(this)) },
+                Tile("\u23F2", "1-min timer") { phoneResult(PhoneTools2.oneMinuteTimer(this)) },
+                Tile("\u23F1", "Stopwatch") { phoneResult(PhoneTools2.stopwatch()) },
+                Tile("\uD83C\uDFC1", "Stopwatch lap") { phoneResult(PhoneTools2.stopwatchLap()) },
+                Tile("\uD83C\uDF0E", "World clock") { showPhoneText("World clock", PhoneTools2.worldClock()) },
+                Tile("\uD83C\uDFB2", "Random 1-100") { phoneResult(PhoneTools2.randomNumber()) },
+                Tile("\u2696", "Coin flip") { phoneResult(PhoneTools2.coinFlip()) },
+                Tile("\u2680", "Roll dice") { phoneResult(PhoneTools2.rollDice()) },
+                Tile("\u270F", "Quick note") { PhoneTools2.quickNote(this) },
+                Tile("\uD83D\uDCC6", "Copy date/time") { phoneResult(PhoneTools2.copyDateTime(this)) }
+            )),
+            PhoneGroup("\uD83D\uDCF6", "NETWORK & INFO", listOf(
+                Tile("\uD83D\uDCF6", "Wi-Fi name") { phoneResult(PhoneTools2.wifiName(this)) },
+                Tile("\uD83C\uDF10", "Phone IP") { phoneResult(PhoneTools2.phoneIp(this)) },
+                Tile("\uD83D\uDCC4", "Copy IP") { phoneResult(PhoneTools2.copyIp(this)) },
+                Tile("\uD83D\uDD0C", "Network type") { phoneResult(PhoneTools2.networkType(this)) },
+                Tile("\u2139", "Phone info") { phoneResult(PhoneTools.info(this)) },
+                Tile("\uD83D\uDD15", "Notif status") { showPhoneText("Notifications", PhoneTools2.notifStatus(this)) },
+                Tile("\uD83D\uDD70", "Uptime") { phoneResult(PhoneTools2.uptime()) }
+            ))
         )
-        val g = Fx.grid(this, tiles, 3)
-        homeGrid = g
-        binding.homeColumn.addView(g)
+        val cards = groups.map { Pair(it, categoryPage(it)) }
+        val col = binding.phoneColumn
+        cards.chunked(2).forEach { pair ->
+            val row = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                layoutParams = android.widget.LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dpf(12f).toInt() }
+            }
+            pair.forEachIndexed { k, (g, page) ->
+                val lp = android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                if (k == 0) lp.marginEnd = dpf(6f).toInt() else lp.marginStart = dpf(6f).toInt()
+                row.addView(groupCard(g, page), lp)
+            }
+            col.addView(row)
+        }
+    }
+
+    /** A glass card for one group: glyph, name, and how many tools it holds. */
+    private fun groupCard(g: PhoneGroup, page: ChildPage): View {
+        val card = HudCard(this).apply {
+            val pd = dpf(14f).toInt()
+            setPadding(pd, pd, pd, pd)
+            minimumHeight = dpf(120f).toInt()
+            isClickable = true
+            isFocusable = true
+            addView(android.widget.TextView(this@MainActivity).apply {
+                text = g.glyph
+                textSize = 28f
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            })
+            addView(android.widget.TextView(this@MainActivity).apply {
+                text = g.title
+                textSize = 12f
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
+                letterSpacing = 0.12f
+                setPadding(0, dpf(10f).toInt(), 0, 0)
+            })
+            addView(android.widget.TextView(this@MainActivity).apply {
+                text = "${g.tiles.size} TOOLS  ›"
+                textSize = 10f
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_faint))
+                typeface = android.graphics.Typeface.MONOSPACE
+                letterSpacing = 0.1f
+            })
+        }
+        Fx.press(card)
+        card.setOnClickListener { openChild(page) }
+        return card
+    }
+
+    /** The page behind one group card: a back chip, the group's title, and its tiles in a grid. */
+    private fun categoryPage(g: PhoneGroup): ChildPage {
+        val sv = android.widget.ScrollView(this).apply {
+            layoutParams = android.widget.FrameLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            isFillViewport = true
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            visibility = View.GONE
+        }
+        val col = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            val p = dpf(16f).toInt()
+            setPadding(p, p, p, p)
+        }
+        val head = pageHeader("‹  PHONE", g.title, "${g.tiles.size} TOOLS  //  TAP A TILE") { goBack() }
+        col.addView(head.first)
+        val grid = Fx.grid(this, g.tiles, 3)
+        col.addView(grid)
+        sv.addView(col)
+        binding.pagesFrame.addView(sv)
+        val page = ChildPage(sv, col, head.second, grid, g.title)
+        childPages.add(page)
+        return page
+    }
+
+    /** The top of a group page: a back chip, the title (it decodes in on entry) and a faint subtitle. */
+    private fun pageHeader(back: String, title: String, sub: String, onBack: () -> Unit):
+        Pair<android.widget.LinearLayout, android.widget.TextView> {
+        val col = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dpf(14f).toInt() }
+        }
+        val chip = android.widget.TextView(this).apply {
+            text = back
+            textSize = 11f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
+            setBackgroundResource(R.drawable.bg_chip)
+            val ph = dpf(12f).toInt()
+            val pv = dpf(6f).toInt()
+            setPadding(ph, pv, ph, pv)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onBack() }
+        }
+        col.addView(chip, android.widget.LinearLayout.LayoutParams(
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dpf(10f).toInt() })
+        val tv = android.widget.TextView(this).apply {
+            text = title
+            textSize = 24f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
+            letterSpacing = 0.2f
+        }
+        col.addView(tv)
+        col.addView(android.widget.TextView(this).apply {
+            text = sub
+            textSize = 10f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_faint))
+            typeface = android.graphics.Typeface.MONOSPACE
+            letterSpacing = 0.2f
+            setPadding(0, dpf(2f).toInt(), 0, 0)
+        })
+        return Pair(col, tv)
     }
 
     private fun phoneResult(msg: String) {

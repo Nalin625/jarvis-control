@@ -6,15 +6,18 @@
     <FrameLayout android:id="@+id/pagesFrame" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
       <ScrollView android:id="@+id/pageHome" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:scrollbars="none" android:overScrollMode="never">
         <LinearLayout android:id="@+id/homeColumn" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
-          <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginBottom="14dp">
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="4dp">
-              <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginStart="0dp" android:layout_marginEnd="0dp">
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="J.A.R.V.I.S" android:textColor="@color/accent" android:textSize="28sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.22" />
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="CONTROL LINK  //  MOBILE NODE" android:textColor="@color/text_faint" android:textSize="10sp" android:fontFamily="monospace" android:letterSpacing="0.2" android:layout_marginTop="2dp" />
-              </LinearLayout>
-              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:id="@+id/heroBadge" android:text="● OFFLINE" android:textColor="@color/warning" android:textSize="11sp" android:textStyle="bold" android:fontFamily="monospace" android:background="@drawable/bg_chip" android:paddingLeft="12dp" android:paddingRight="12dp" android:paddingTop="6dp" android:paddingBottom="6dp" />
+          <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="6dp">
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+              <TextView android:id="@+id/titleHome" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="J.A.R.V.I.S" android:textColor="@color/accent" android:textSize="28sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.22" />
+              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="CONTROL LINK  //  TAP AN ORB" android:textColor="@color/text_faint" android:textSize="10sp" android:fontFamily="monospace" android:letterSpacing="0.2" android:layout_marginTop="2dp" />
             </LinearLayout>
-            <com.jarvis.control.ReactorView android:id="@+id/reactorView" android:layout_width="match_parent" android:layout_height="190dp" android:layout_marginTop="4dp" android:layout_marginBottom="6dp" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:id="@+id/heroBadge" android:text="● OFFLINE" android:textColor="@color/warning" android:textSize="11sp" android:textStyle="bold" android:fontFamily="monospace" android:background="@drawable/bg_chip" android:paddingLeft="12dp" android:paddingRight="12dp" android:paddingTop="6dp" android:paddingBottom="6dp" />
+          </LinearLayout>
+          <!-- buildStatusStrip() inserts the laptop status line here, at index 1 -->
+          <FrameLayout android:id="@+id/hubStage" android:layout_width="match_parent" android:layout_height="330dp">
+            <com.jarvis.control.ReactorView android:id="@+id/reactorView" android:layout_width="170dp" android:layout_height="170dp" android:layout_gravity="center" />
+            <com.jarvis.control.HubView android:id="@+id/hubOrbs" android:layout_width="match_parent" android:layout_height="match_parent" />
+          </FrameLayout>
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="10dp">
               <TextView android:id="@+id/chipServer" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:text="● SERVER" android:textColor="@color/text_dim" android:textSize="11sp" android:textStyle="bold" android:fontFamily="monospace" android:background="@drawable/bg_chip" android:paddingTop="8dp" android:paddingBottom="8dp" android:layout_marginStart="3dp" android:layout_marginEnd="3dp" />
               <TextView android:id="@+id/chipLaptop" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:text="● LAPTOP" android:textColor="@color/text_dim" android:textSize="11sp" android:textStyle="bold" android:fontFamily="monospace" android:background="@drawable/bg_chip" android:paddingTop="8dp" android:paddingBottom="8dp" android:layout_marginStart="3dp" android:layout_marginEnd="3dp" />
@@ -34,21 +37,22 @@
                 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:id="@+id/statBattery" android:text="—" android:textColor="@color/accent" android:textSize="17sp" android:textStyle="bold" android:fontFamily="monospace" />
               </LinearLayout>
             </LinearLayout>
-          </LinearLayout>
         </LinearLayout>
       </ScrollView>
       <ScrollView android:id="@+id/pageDeck" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:scrollbars="none" android:overScrollMode="never" android:visibility="gone">
         <LinearLayout android:id="@+id/deckColumn" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
-          <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginBottom="12dp">
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="DECK" android:textColor="@color/accent" android:textSize="22sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.2" />
+          <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginBottom="14dp">
+            <TextView android:id="@+id/backDeck" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="‹  HUB" android:textColor="@color/accent" android:textSize="11sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.12" android:background="@drawable/bg_chip" android:paddingLeft="12dp" android:paddingRight="12dp" android:paddingTop="6dp" android:paddingBottom="6dp" android:clickable="true" android:focusable="true" android:layout_marginBottom="10dp" />
+            <TextView android:id="@+id/titleDeck" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="DECK" android:textColor="@color/accent" android:textSize="24sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.2" />
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="LAPTOP CONTROL  //  TAP TO FIRE" android:textColor="@color/text_faint" android:textSize="10sp" android:fontFamily="monospace" android:letterSpacing="0.2" android:layout_marginTop="2dp" />
           </LinearLayout>
         </LinearLayout>
       </ScrollView>
       <ScrollView android:id="@+id/pageLink" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:scrollbars="none" android:overScrollMode="never" android:visibility="gone">
         <LinearLayout android:id="@+id/contentColumn" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
-          <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginBottom="12dp">
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="LINK" android:textColor="@color/accent" android:textSize="22sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.2" />
+          <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginBottom="14dp">
+            <TextView android:id="@+id/backLink" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="‹  HUB" android:textColor="@color/accent" android:textSize="11sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.12" android:background="@drawable/bg_chip" android:paddingLeft="12dp" android:paddingRight="12dp" android:paddingTop="6dp" android:paddingBottom="6dp" android:clickable="true" android:focusable="true" android:layout_marginBottom="10dp" />
+            <TextView android:id="@+id/titleLink" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="LINK" android:textColor="@color/accent" android:textSize="24sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.2" />
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="DISCOVERY  //  PAIRING" android:textColor="@color/text_faint" android:textSize="10sp" android:fontFamily="monospace" android:letterSpacing="0.2" android:layout_marginTop="2dp" />
           </LinearLayout>
           <com.jarvis.control.HudCard android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:layout_marginBottom="14dp">
@@ -82,8 +86,9 @@
       </ScrollView>
       <ScrollView android:id="@+id/pageCore" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:scrollbars="none" android:overScrollMode="never" android:visibility="gone">
         <LinearLayout android:id="@+id/coreColumn" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
-          <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginBottom="12dp">
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="CORE" android:textColor="@color/accent" android:textSize="22sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.2" />
+          <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginBottom="14dp">
+            <TextView android:id="@+id/backCore" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="‹  HUB" android:textColor="@color/accent" android:textSize="11sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.12" android:background="@drawable/bg_chip" android:paddingLeft="12dp" android:paddingRight="12dp" android:paddingTop="6dp" android:paddingBottom="6dp" android:clickable="true" android:focusable="true" android:layout_marginBottom="10dp" />
+            <TextView android:id="@+id/titleCore" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="CORE" android:textColor="@color/accent" android:textSize="24sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.2" />
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="AI  //  SERVER  //  SCREEN" android:textColor="@color/text_faint" android:textSize="10sp" android:fontFamily="monospace" android:letterSpacing="0.2" android:layout_marginTop="2dp" />
           </LinearLayout>
           <com.jarvis.control.HudCard android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:layout_marginBottom="14dp">
@@ -128,8 +133,9 @@
       </ScrollView>
       <ScrollView android:id="@+id/pageSetup" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:scrollbars="none" android:overScrollMode="never" android:visibility="gone">
         <LinearLayout android:id="@+id/setupColumn" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
-          <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginBottom="12dp">
-            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="SETUP" android:textColor="@color/accent" android:textSize="22sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.2" />
+          <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginBottom="14dp">
+            <TextView android:id="@+id/backSetup" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="‹  HUB" android:textColor="@color/accent" android:textSize="11sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.12" android:background="@drawable/bg_chip" android:paddingLeft="12dp" android:paddingRight="12dp" android:paddingTop="6dp" android:paddingBottom="6dp" android:clickable="true" android:focusable="true" android:layout_marginBottom="10dp" />
+            <TextView android:id="@+id/titleSetup" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="SETUP" android:textColor="@color/accent" android:textSize="24sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.2" />
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="DEVICE  //  UPLINK  //  THEME" android:textColor="@color/text_faint" android:textSize="10sp" android:fontFamily="monospace" android:letterSpacing="0.2" android:layout_marginTop="2dp" />
           </LinearLayout>
           <com.jarvis.control.HudCard android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="18dp" android:layout_marginBottom="14dp">
@@ -172,7 +178,15 @@
           <TextView android:gravity="center" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="J.A.R.V.I.S  //  END OF TRANSMISSION" android:textColor="@color/text_faint" android:textSize="10sp" android:fontFamily="monospace" android:letterSpacing="0.2" android:layout_gravity="center_horizontal" />
         </LinearLayout>
       </ScrollView>
+      <ScrollView android:id="@+id/pagePhone" android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true" android:scrollbars="none" android:overScrollMode="never" android:visibility="gone">
+        <LinearLayout android:id="@+id/phoneColumn" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
+          <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginBottom="14dp">
+            <TextView android:id="@+id/backPhone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="‹  HUB" android:textColor="@color/accent" android:textSize="11sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.12" android:background="@drawable/bg_chip" android:paddingLeft="12dp" android:paddingRight="12dp" android:paddingTop="6dp" android:paddingBottom="6dp" android:clickable="true" android:focusable="true" android:layout_marginBottom="10dp" />
+            <TextView android:id="@+id/titlePhone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="PHONE" android:textColor="@color/accent" android:textSize="24sp" android:textStyle="bold" android:fontFamily="monospace" android:letterSpacing="0.2" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="TOOLS  //  PICK A GROUP" android:textColor="@color/text_faint" android:textSize="10sp" android:fontFamily="monospace" android:letterSpacing="0.2" android:layout_marginTop="2dp" />
+          </LinearLayout>
+        </LinearLayout>
+      </ScrollView>
     </FrameLayout>
-    <com.jarvis.control.NavBar android:id="@+id/navBar" android:layout_width="match_parent" android:layout_height="62dp" />
   </LinearLayout>
 </FrameLayout>

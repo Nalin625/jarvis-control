@@ -45,7 +45,8 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
 
         if (path != "/ping") {
             val providedToken = session.headers["x-jarvis-token"]
-            if (token.isNotEmpty() && providedToken != token) {
+            // an empty token means nothing is allowed in: a server that accepts anyone never runs
+            if (token.isEmpty() || providedToken != token) {
                 return unauthorized()
             }
         }

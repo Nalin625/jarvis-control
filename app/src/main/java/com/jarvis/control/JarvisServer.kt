@@ -73,6 +73,7 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
                 "/open" -> handleOpen(session)
                 "/volume" -> handleVolume(session)
                 "/torch" -> handleTorch(session)
+                "/camera/shot" -> handleCameraShot(session)
                 "/clipboard" -> handleClipboard(session)
                 "/screen.jpg" -> handleScreenFrame(session)
                 "/screen/status" -> handleScreenStatus()
@@ -307,6 +308,36 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
 
         cameraManager.setTorchMode(camId, state == "on")
         return json(JSONObject().put("ok", true))
+    }
+
+    /**
+     * POST {"facing": "back"|"front", "max_side": 1600, "quality": 88} -> one still photo, silently taken by
+     * ShotService (a camera foreground service) and returned as base64 JPEG. The phone keeps a copy in
+     * Pictures/Jarvis and posts a notification, so a photo is never taken without the owner seeing it.
+     */
+    private fun handleCameraShot(session: IHTTPSession): Response {
+        val body = readBody(session)
+        val facing = if (body.optString("facing", "back") == "front") "front" else "back"
+        val maxSide = body.optInt("max_side", 1600).coerceIn(640, 2048)
+        val quality = body.optInt("quality", 88).coerceIn(50, 95)
+        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return json(JSONObject().put("error", "Camera permission not granted — open the app once and allow it."))
+        }
+        val shot = ShotBridge.take(context, facing, maxSide, quality)
+        val err = shot.error
+        if (err != null || shot.jpeg == null) {
+            return json(JSONObject().put("error", err ?: "no picture was taken"))
+        }
+        return json(
+            JSONObject()
+                .put("ok", true)
+                .put("jpeg_b64", android.util.Base64.encodeToString(shot.jpeg, android.util.Base64.NO_WRAP))
+                .put("width", shot.width)
+                .put("height", shot.height)
+                .put("saved", shot.savedAs)
+        )
     }
 
     private fun handleClipboard(session: IHTTPSession): Response {

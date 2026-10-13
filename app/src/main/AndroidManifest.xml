@@ -82,6 +82,11 @@
         </activity>
 
         <service
+            android:name=".ShotService"
+            android:exported="false"
+            android:foregroundServiceType="camera" />
+
+        <service
             android:name=".JarvisService"
             android:exported="false"
             android:foregroundServiceType="specialUse">

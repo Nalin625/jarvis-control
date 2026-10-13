@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="insta_shutter_description">Lets the laptop press the Instagram camera shutter when you say click instant. It reads the screen only when the laptop asks, and sends nothing anywhere except one screenshot for the AI fallback.</string>
+</resources>

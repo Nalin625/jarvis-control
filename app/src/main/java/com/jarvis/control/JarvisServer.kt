@@ -74,6 +74,9 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
                 "/volume" -> handleVolume(session)
                 "/torch" -> handleTorch(session)
                 "/camera/shot" -> handleCameraShot(session)
+                "/insta/status" -> handleInstaStatus()
+                "/insta/shutter" -> handleInstaShutter()
+                "/insta/tap" -> handleInstaTap(session)
                 "/clipboard" -> handleClipboard(session)
                 "/screen.jpg" -> handleScreenFrame(session)
                 "/screen/status" -> handleScreenStatus()
@@ -338,6 +341,61 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
                 .put("height", shot.height)
                 .put("saved", shot.savedAs)
         )
+    }
+
+    /** Is Instagram in front, and is the Jarvis Shutter accessibility service on? */
+    private fun handleInstaStatus(): Response {
+        val fg = InstaShutterService.foreground
+        return json(
+            JSONObject()
+                .put("connected", InstaShutterService.instance != null)
+                .put("foreground", fg)
+                .put("instagram_open", fg == InstaShutterService.INSTAGRAM)
+        )
+    }
+
+    /** Presses Instagram's shutter. If the button has no label, returns one screenshot so the laptop can find it. */
+    private fun handleInstaShutter(): Response {
+        val svc = InstaShutterService.instance
+            ?: return json(JSONObject().put("error", "Jarvis Shutter is off. Turn it on in Settings > Accessibility."))
+        if (InstaShutterService.foreground != InstaShutterService.INSTAGRAM) {
+            return json(JSONObject().put("error", "Instagram is not open on the phone."))
+        }
+        val found = svc.tapShutterByLabel()
+        if (found == "tapped") return json(JSONObject().put("ok", true).put("method", "label"))
+        if (found != "no label") return json(JSONObject().put("error", found.removePrefix("error: ")))
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return json(JSONObject().put("error", "the shutter has no label and this Android is too old for the AI fallback"))
+        }
+        val jpg = svc.screenshotJpeg()
+            ?: return json(JSONObject().put("error", "could not take a screenshot of Instagram"))
+        return json(
+            JSONObject()
+                .put("ok", false)
+                .put("need_ai", true)
+                .put("jpeg_b64", android.util.Base64.encodeToString(jpg, android.util.Base64.NO_WRAP))
+        )
+    }
+
+    /** Taps a point given as fractions of the screen: {"x": 0.5, "y": 0.8}. */
+    private fun handleInstaTap(session: IHTTPSession): Response {
+        val svc = InstaShutterService.instance
+            ?: return json(JSONObject().put("error", "Jarvis Shutter is off. Turn it on in Settings > Accessibility."))
+        if (InstaShutterService.foreground != InstaShutterService.INSTAGRAM) {
+            return json(JSONObject().put("error", "Instagram is not open on the phone."))
+        }
+        val b = readBody(session)
+        val fx = b.optDouble("x", -1.0)
+        val fy = b.optDouble("y", -1.0)
+        if (fx < 0 || fy < 0 || fx > 1 || fy > 1) {
+            return json(JSONObject().put("error", "x and y must be between 0 and 1"))
+        }
+        val result = svc.tapNormalized(fx, fy)
+        return if (result == "tapped") {
+            json(JSONObject().put("ok", true))
+        } else {
+            json(JSONObject().put("error", result.removePrefix("error: ")))
+        }
     }
 
     private fun handleClipboard(session: IHTTPSession): Response {

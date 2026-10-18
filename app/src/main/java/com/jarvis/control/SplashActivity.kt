@@ -15,6 +15,9 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.Random
 import kotlin.math.min
 import kotlin.math.sin
@@ -23,7 +26,9 @@ import kotlin.math.sin
 class SplashActivity : AppCompatActivity() {
 
     companion object {
-        const val SPLASH_MS = 3600L
+        const val SPLASH_MS = 7000L
+        const val PREFS = "jarvis_ui"
+        const val KEY_SPLASH_DAY = "splash_day"
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -31,6 +36,14 @@ class SplashActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // the opening screen plays once a day; later opens today go straight to the app
+        val prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        if (prefs.getString(KEY_SPLASH_DAY, "") == today) {
+            openMain()
+            return
+        }
+        prefs.edit().putString(KEY_SPLASH_DAY, today).apply()
         setContentView(SplashView(this))
         handler.postDelayed({ openMain() }, SPLASH_MS)
     }

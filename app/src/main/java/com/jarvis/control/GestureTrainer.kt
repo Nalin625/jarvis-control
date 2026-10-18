@@ -8,10 +8,6 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import kotlin.math.sqrt
 
-/** What one recording did: how many frames had a clear hand, how many examples were kept, the sign's total,
- *  and another sign that this one looks too much like (null if none). */
-class Recording(val usable: Int, val kept: Int, val total: Int, val lookalike: String?)
-
 /**
  * Teaches JARVIS your gestures. Keeps only the 21 hand-landmark numbers per example, never images.
  * Same logic as jarvis_gesture_trainer.py (the laptop reference copy).
@@ -24,9 +20,6 @@ class GestureTrainer private constructor(private val file: File) {
         private const val K = 3
         private const val MATCH_LIMIT = 0.35f
         private const val DIMS = 63
-        private const val MIN_USABLE_FRAMES = 10    // a 3-second recording needs this many frames with a clear hand
-        private const val TAKE_PER_RECORDING = 30   // at most this many examples from one recording, spread over its time
-        private const val LOOKALIKE_LIMIT = 0.25f   // a sign this close to a new one may be mixed up with it (a guess; tune on the phone)
 
         @Volatile
         private var shared: GestureTrainer? = null
@@ -92,47 +85,6 @@ class GestureTrainer private constructor(private val file: File) {
         save()
         return had
     }
-
-    /**
-     * Learns one sign from a recording of frames (each frame's 21 landmarks, or null when no hand was seen).
-     * Keeps at most TAKE_PER_RECORDING frames, spread evenly over the recording, so a long hold does not flood the sign.
-     * Returns null only when the name is empty.
-     */
-    @Synchronized
-    fun recordVideo(rawName: String, frames: List<List<FloatArray>?>): Recording? {
-        val label = cleanName(rawName)
-        if (label.isEmpty()) return null
-        val vecs = frames.mapNotNull { if (it == null) null else normalize(it) }
-        val usable = vecs.size
-        if (usable < MIN_USABLE_FRAMES) return Recording(usable, 0, samples[label]?.size ?: 0, null)
-        val take = minOf(TAKE_PER_RECORDING, usable)
-        val picked = List(take) { vecs[it * usable / take] }
-        val lookalike = nearestOtherSign(label, picked)
-        val list = samples.getOrPut(label) { mutableListOf() }
-        list.addAll(picked)
-        while (list.size > MAX_SAMPLES) list.removeAt(0)
-        save()
-        return Recording(usable, take, list.size, lookalike)
-    }
-
-    /** The other sign whose nearest example is closest to these, if that is close enough to be mixed up. */
-    private fun nearestOtherSign(label: String, picked: List<FloatArray>): String? {
-        var best: String? = null
-        var bestDist = Float.MAX_VALUE
-        for ((other, vecs) in samples) {
-            if (other == label) continue
-            for (v in vecs) for (p in picked) {
-                val d = dist(p, v)
-                if (d < bestDist) {
-                    bestDist = d
-                    best = other
-                }
-            }
-        }
-        return if (bestDist <= LOOKALIKE_LIMIT) best else null
-    }
-
-    private fun cleanName(raw: String): String = raw.trim().lowercase().replace(' ', '_')
 
     /** The matching gesture name and how sure (0..1), or null when nothing is close enough. */
     @Synchronized

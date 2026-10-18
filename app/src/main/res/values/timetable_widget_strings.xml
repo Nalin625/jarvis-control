@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="timetable_widget_label">Today\'s next block</string>
+    <string name="timetable_widget_description">Shows the block to do now, or the next one, from today\'s plan. Works with the laptop off.</string>
+</resources>

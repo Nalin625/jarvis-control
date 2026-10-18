@@ -1,55 +1,36 @@
 package com.jarvis.control
 
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
-import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Typeface
-import android.graphics.drawable.Drawable
-import android.util.TypedValue
 import android.view.Gravity
-import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.animation.DecelerateInterpolator
-import android.view.animation.LinearInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.content.ContextCompat
-import kotlin.random.Random
 
 /** One tappable tile on the Home or Deck page. */
 class Tile(val glyph: String, val label: String, val action: () -> Unit)
 
-/**
- * Small animation helpers. Everything uses GPU view properties (scale/alpha/translation) or a short,
- * self-stopping animator, so nothing keeps running once it has played.
- */
+/** Small animation helpers. Everything uses GPU view properties (scale/alpha/translation), no per-frame drawing. */
 object Fx {
-    private const val GLYPHS = "#%&@/<>01+=*"
-
     private fun dp(ctx: Context, v: Float) = (v * ctx.resources.displayMetrics.density).toInt()
 
-    /** Squash and a little buzz on touch-down, springy overshoot on release. Never swallows the click. */
+    /** Squash on touch-down, springy overshoot on release. Never swallows the click. */
     @SuppressLint("ClickableViewAccessibility")
     fun press(v: View) {
         v.setOnTouchListener { view, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN ->
-                    view.animate().scaleX(0.93f).scaleY(0.93f).setDuration(80)
+                    view.animate().scaleX(0.94f).scaleY(0.94f).setDuration(90)
                         .setInterpolator(DecelerateInterpolator()).start()
-                MotionEvent.ACTION_UP -> {
-                    // buzz only on a real tap: a scroll cancels the touch before it reaches ACTION_UP
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    view.animate().scaleX(1f).scaleY(1f).setDuration(320)
-                        .setInterpolator(OvershootInterpolator(3f)).start()
-                }
-                MotionEvent.ACTION_CANCEL ->
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
                     view.animate().scaleX(1f).scaleY(1f).setDuration(320)
                         .setInterpolator(OvershootInterpolator(3f)).start()
             }
@@ -85,13 +66,6 @@ object Fx {
         }
     }
 
-    /** The system's borderless touch ripple. The system draws it, so it costs almost nothing. */
-    private fun rippleFor(ctx: Context): Drawable? {
-        val tv = TypedValue()
-        val found = ctx.theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, tv, true)
-        return if (found && tv.resourceId != 0) ContextCompat.getDrawable(ctx, tv.resourceId) else null
-    }
-
     fun tile(ctx: Context, t: Tile): View {
         val box = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -99,7 +73,6 @@ object Fx {
             setBackgroundResource(R.drawable.bg_tile)
             isClickable = true
             isFocusable = true
-            foreground = rippleFor(ctx)
             setPadding(dp(ctx, 4f), dp(ctx, 6f), dp(ctx, 4f), dp(ctx, 6f))
             addView(TextView(ctx).apply {
                 text = t.glyph; textSize = 24f; gravity = Gravity.CENTER
@@ -150,44 +123,5 @@ object Fx {
             for (i in 0 until row.childCount) if (row.getChildAt(i) is LinearLayout) out.add(row.getChildAt(i))
         }
         return out
-    }
-
-    /** A title decodes out of random glyphs into [target]. Starting a new one cancels the old one. */
-    fun scramble(tv: TextView, target: String, ms: Long = 380L) {
-        (tv.tag as? ValueAnimator)?.cancel()
-        val anim = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = ms
-            interpolator = LinearInterpolator()
-            addUpdateListener {
-                val solved = (target.length * (it.animatedValue as Float)).toInt()
-                val sb = StringBuilder(target.length)
-                for (i in target.indices) {
-                    val ch = target[i]
-                    sb.append(if (i < solved || ch == ' ') ch else GLYPHS[Random.nextInt(GLYPHS.length)])
-                }
-                tv.text = sb.toString()
-            }
-            addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(a: Animator) { tv.text = target }
-            })
-        }
-        tv.tag = anim
-        anim.start()
-    }
-
-    /** Text appears one character after another (a short typewriter). Long text is shown at once. */
-    fun typeOn(tv: TextView, full: String) {
-        (tv.tag as? ValueAnimator)?.cancel()
-        if (full.length > 600) { tv.text = full; return }
-        val anim = ValueAnimator.ofInt(0, full.length).apply {
-            duration = (full.length * 9L).coerceIn(160L, 520L)
-            interpolator = LinearInterpolator()
-            addUpdateListener { tv.text = full.substring(0, it.animatedValue as Int) }
-            addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(a: Animator) { tv.text = full }
-            })
-        }
-        tv.tag = anim
-        anim.start()
     }
 }

@@ -1,6 +1,5 @@
 package com.jarvis.control
 
-import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
@@ -17,7 +16,6 @@ import android.os.VibratorManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import fi.iki.elonen.NanoHTTPD
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 
@@ -45,8 +43,7 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
 
         if (path != "/ping") {
             val providedToken = session.headers["x-jarvis-token"]
-            // an empty token means nothing is allowed in: a server that accepts anyone never runs
-            if (token.isEmpty() || providedToken != token) {
+            if (token.isNotEmpty() && providedToken != token) {
                 return unauthorized()
             }
         }
@@ -55,37 +52,14 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
             when (path) {
                 "/ping" -> handlePing()
                 "/battery" -> handleBattery()
-                "/status" -> handleStatus()
-                "/ai/start" -> handleAiStart()
-                "/mic/start" -> handleMicStart()
-                "/mic/stop" -> handleMicStop()
-                "/mic/once" -> handleMicOnce()
-                "/call/answer" -> handleCallAnswer()
-                "/call/mode" -> handleCallMode(session)
-                "/call/test" -> handleCallTest()
-                "/find" -> handleFind(session)
-                "/speak" -> handleSpeak(session)
-                "/media" -> handleMedia(session)
-                "/ringer" -> handleRinger(session)
-                "/location" -> handleLocation()
                 "/notify" -> handleNotify(session)
                 "/vibrate" -> handleVibrate()
                 "/open" -> handleOpen(session)
                 "/volume" -> handleVolume(session)
                 "/torch" -> handleTorch(session)
-                "/camera/shot" -> handleCameraShot(session)
-                "/insta/status" -> handleInstaStatus()
-                "/insta/shutter" -> handleInstaShutter()
-                "/insta/tap" -> handleInstaTap(session)
                 "/clipboard" -> handleClipboard(session)
                 "/screen.jpg" -> handleScreenFrame(session)
                 "/screen/status" -> handleScreenStatus()
-                "/lock" -> handleLock()
-                "/power" -> handlePower()
-                "/apps" -> handleApps()
-                "/tap" -> handleTap(session)
-                "/swipe" -> handleSwipe(session)
-                "/nav" -> handleNav(session)
                 else -> json(JSONObject().put("error", "unknown endpoint"), Response.Status.NOT_FOUND)
             }
         } catch (e: Exception) {
@@ -114,126 +88,6 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
             JSONObject()
                 .put("percentage", pct)
                 .put("status", if (charging) "charging" else "discharging")
-        )
-    }
-
-    /** One-call device summary for the laptop's live phone card. */
-    private fun handleStatus(): Response {
-        val sticky = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val level = sticky?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-        val scale = sticky?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
-        val pct = if (level >= 0 && scale > 0) level * 100 / scale else -1
-        val st = sticky?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-        val charging = st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL
-        val tempC = (sticky?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0
-
-        @Suppress("DEPRECATION")
-        val rssi = try {
-            val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
-            wm.connectionInfo?.rssi ?: 0
-        } catch (e: Exception) { 0 }
-
-        val sf = android.os.StatFs(android.os.Environment.getDataDirectory().path)
-        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-        val mi = android.app.ActivityManager.MemoryInfo()
-        am.getMemoryInfo(mi)
-
-        return json(
-            JSONObject()
-                .put("ok", true)
-                .put("name", Build.MODEL)
-                .put("battery", pct)
-                .put("charging", charging)
-                .put("temp_c", tempC)
-                .put("wifi_dbm", rssi)
-                .put("storage_free_gb", sf.availableBytes / 1_000_000_000.0)
-                .put("storage_total_gb", sf.totalBytes / 1_000_000_000.0)
-                .put("ram_free_mb", mi.availMem / 1_000_000)
-                .put("ram_total_mb", mi.totalMem / 1_000_000)
-        )
-    }
-
-    /** The laptop asks for the phone AI when Gemini is exhausted: start Ollama in Termux. */
-    private fun micDenied(): Response =
-        json(JSONObject().put("error", "Open Jarvis Control once and tap ALLOW MICROPHONE."), Response.Status.INTERNAL_ERROR)
-
-    private fun handleMicStart(): Response {
-        if (!MicService.hasPermission(context)) return micDenied()
-        MicService.setListening(context.applicationContext, true)
-        return json(JSONObject().put("ok", true).put("listening", true))
-    }
-
-    private fun handleMicStop(): Response {
-        MicService.setListening(context.applicationContext, false)
-        return json(JSONObject().put("ok", true).put("listening", false))
-    }
-
-    private fun handleMicOnce(): Response {
-        if (!MicService.hasPermission(context)) return micDenied()
-        MicService.listenOnce(context.applicationContext)
-        return json(JSONObject().put("ok", true))
-    }
-
-    private fun handleCallAnswer(): Response =
-        if (CallAssistService.answerNow()) json(JSONObject().put("ok", true).put("message", "Jarvis is answering the call."))
-        else json(JSONObject().put("error", "No call is ringing, or the call assistant is off."))
-
-    private fun handleCallMode(session: IHTTPSession): Response {
-        val m = readBody(session).optString("mode", "").lowercase()
-        if (m != "ask" && m != "auto" && m != "off") return json(JSONObject().put("error", "mode must be ask, auto or off"))
-        val ok = CallAssistService.setMode(context.applicationContext, m)
-        return if (ok) json(JSONObject().put("ok", true).put("message", "Call assistant: $m"))
-        else json(JSONObject().put("error", "Open the Jarvis Control app and allow the phone permissions first, then try again."))
-    }
-
-    private fun handleCallTest(): Response =
-        if (CallAssistService.test()) json(JSONObject().put("ok", true).put("message", "Test call started. Talk to the phone."))
-        else json(JSONObject().put("error", "Call assistant is off. Turn it on in the phone app first."))
-
-    private fun handleAiStart(): Response {
-        val p = context.getSharedPreferences("jarvis_control", Context.MODE_PRIVATE)
-        val cmd = p.getString("termux_command", null)?.takeIf { it.isNotBlank() } ?: TermuxLauncher.DEFAULT_COMMAND
-        val err = TermuxLauncher.run(context.applicationContext, cmd)
-        return if (err == null) json(JSONObject().put("ok", true))
-        else json(JSONObject().put("error", err), Response.Status.INTERNAL_ERROR)
-    }
-
-    private fun handleFind(session: IHTTPSession): Response {
-        val on = readBody(session).optBoolean("on", true)
-        if (on) FindPhone.start(context) else FindPhone.stop(context)
-        return json(JSONObject().put("ok", true).put("ringing", FindPhone.ringing))
-    }
-
-    private fun handleSpeak(session: IHTTPSession): Response {
-        val text = readBody(session).optString("text", "").take(500)
-        if (text.isBlank()) return json(JSONObject().put("error", "no text"), Response.Status.BAD_REQUEST)
-        PhoneTts.speak(context, text)
-        return json(JSONObject().put("ok", true))
-    }
-
-    private fun handleMedia(session: IHTTPSession): Response {
-        val key = readBody(session).optString("key", "")
-        return if (PhoneMedia.send(context, key)) json(JSONObject().put("ok", true))
-        else json(JSONObject().put("error", "unknown key"), Response.Status.BAD_REQUEST)
-    }
-
-    private fun handleRinger(session: IHTTPSession): Response {
-        val err = PhoneRinger.set(context, readBody(session).optString("mode", ""))
-        return if (err == null) json(JSONObject().put("ok", true))
-        else json(JSONObject().put("error", err), Response.Status.BAD_REQUEST)
-    }
-
-    private fun handleLocation(): Response {
-        val (loc, err) = PhoneLocation.lastFix(context)
-        if (loc == null) return json(JSONObject().put("error", err ?: "no location"), Response.Status.BAD_REQUEST)
-        return json(
-            JSONObject()
-                .put("ok", true)
-                .put("lat", loc.latitude)
-                .put("lon", loc.longitude)
-                .put("accuracy_m", loc.accuracy.toInt())
-                .put("age_s", (System.currentTimeMillis() - loc.time) / 1000)
-                .put("maps", "https://maps.google.com/?q=${loc.latitude},${loc.longitude}")
         )
     }
 
@@ -313,91 +167,6 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
         return json(JSONObject().put("ok", true))
     }
 
-    /**
-     * POST {"facing": "back"|"front", "max_side": 1600, "quality": 88} -> one still photo, silently taken by
-     * ShotService (a camera foreground service) and returned as base64 JPEG. The phone keeps a copy in
-     * Pictures/Jarvis and posts a notification, so a photo is never taken without the owner seeing it.
-     */
-    private fun handleCameraShot(session: IHTTPSession): Response {
-        val body = readBody(session)
-        val facing = if (body.optString("facing", "back") == "front") "front" else "back"
-        val maxSide = body.optInt("max_side", 1600).coerceIn(640, 2048)
-        val quality = body.optInt("quality", 88).coerceIn(50, 95)
-        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA)
-            != android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            return json(JSONObject().put("error", "Camera permission not granted — open the app once and allow it."))
-        }
-        val shot = ShotBridge.take(context, facing, maxSide, quality)
-        val err = shot.error
-        if (err != null || shot.jpeg == null) {
-            return json(JSONObject().put("error", err ?: "no picture was taken"))
-        }
-        return json(
-            JSONObject()
-                .put("ok", true)
-                .put("jpeg_b64", android.util.Base64.encodeToString(shot.jpeg, android.util.Base64.NO_WRAP))
-                .put("width", shot.width)
-                .put("height", shot.height)
-                .put("saved", shot.savedAs)
-        )
-    }
-
-    /** Is Instagram in front, and is the Jarvis Shutter accessibility service on? */
-    private fun handleInstaStatus(): Response {
-        val fg = InstaShutterService.foreground
-        return json(
-            JSONObject()
-                .put("connected", InstaShutterService.instance != null)
-                .put("foreground", fg)
-                .put("instagram_open", fg == InstaShutterService.INSTAGRAM)
-        )
-    }
-
-    /** Presses Instagram's shutter. If the button has no label, returns one screenshot so the laptop can find it. */
-    private fun handleInstaShutter(): Response {
-        val svc = InstaShutterService.instance
-            ?: return json(JSONObject().put("error", "Jarvis Shutter is off. Turn it on in Settings > Accessibility."))
-        if (InstaShutterService.foreground != InstaShutterService.INSTAGRAM) {
-            return json(JSONObject().put("error", "Instagram is not open on the phone."))
-        }
-        val found = svc.tapShutterByLabel()
-        if (found == "tapped") return json(JSONObject().put("ok", true).put("method", "label"))
-        if (found != "no label") return json(JSONObject().put("error", found.removePrefix("error: ")))
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            return json(JSONObject().put("error", "the shutter has no label and this Android is too old for the AI fallback"))
-        }
-        val jpg = svc.screenshotJpeg()
-            ?: return json(JSONObject().put("error", "could not take a screenshot of Instagram"))
-        return json(
-            JSONObject()
-                .put("ok", false)
-                .put("need_ai", true)
-                .put("jpeg_b64", android.util.Base64.encodeToString(jpg, android.util.Base64.NO_WRAP))
-        )
-    }
-
-    /** Taps a point given as fractions of the screen: {"x": 0.5, "y": 0.8}. */
-    private fun handleInstaTap(session: IHTTPSession): Response {
-        val svc = InstaShutterService.instance
-            ?: return json(JSONObject().put("error", "Jarvis Shutter is off. Turn it on in Settings > Accessibility."))
-        if (InstaShutterService.foreground != InstaShutterService.INSTAGRAM) {
-            return json(JSONObject().put("error", "Instagram is not open on the phone."))
-        }
-        val b = readBody(session)
-        val fx = b.optDouble("x", -1.0)
-        val fy = b.optDouble("y", -1.0)
-        if (fx < 0 || fy < 0 || fx > 1 || fy > 1) {
-            return json(JSONObject().put("error", "x and y must be between 0 and 1"))
-        }
-        val result = svc.tapNormalized(fx, fy)
-        return if (result == "tapped") {
-            json(JSONObject().put("ok", true))
-        } else {
-            json(JSONObject().put("error", result.removePrefix("error: ")))
-        }
-    }
-
     private fun handleClipboard(session: IHTTPSession): Response {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
 
@@ -429,133 +198,6 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
                 .put("width", ScreenShareState.width)
                 .put("height", ScreenShareState.height)
         )
-    }
-
-    private val needsAccessibility =
-        "The phone's accessibility blocker is off. Turn on Jarvis night lock in Accessibility (Night Lock section) first."
-
-    private fun handleLock(): Response {
-        val svc = NightLockService.instance ?: return json(JSONObject().put("error", needsAccessibility))
-        return if (svc.lockScreen()) {
-            json(JSONObject().put("ok", true).put("message", "Phone screen locked."))
-        } else {
-            json(JSONObject().put("error", "This phone couldn't lock the screen. Android 9 or newer is needed."))
-        }
-    }
-
-    private fun handlePower(): Response {
-        val svc = NightLockService.instance ?: return json(JSONObject().put("error", needsAccessibility))
-        return if (svc.powerMenu()) {
-            json(JSONObject().put("ok", true).put("message", "Power menu opened on your phone. Tap Power off there."))
-        } else {
-            json(JSONObject().put("error", "This phone couldn't open the power menu. Android 9 or newer is needed."))
-        }
-    }
-
-    /** True while the phone's screen is locked. The laptop never taps on a locked phone. */
-    private fun phoneLocked(): Boolean =
-        context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
-
-    private val lockedMsg =
-        "Your phone is locked. Unlock it yourself first; the laptop can't unlock it."
-
-    /**
-     * Taps a point on the screen. Body: {"fx": 0.5, "fy": 0.8} as fractions of the screen (what the
-     * laptop's mirror sends), or {"x": 540, "y": 1200} in pixels.
-     */
-    private fun handleTap(session: IHTTPSession): Response {
-        val svc = NightLockService.instance ?: return json(JSONObject().put("error", needsAccessibility))
-        if (phoneLocked()) return json(JSONObject().put("error", lockedMsg))
-        val b = readBody(session)
-        val m = context.resources.displayMetrics
-        val x: Float
-        val y: Float
-        if (b.has("fx")) {
-            val fx = b.optDouble("fx", -1.0)
-            val fy = b.optDouble("fy", -1.0)
-            if (fx < 0 || fy < 0 || fx > 1 || fy > 1) {
-                return json(JSONObject().put("error", "Give fx and fy between 0 and 1."))
-            }
-            x = (fx * m.widthPixels).toFloat()
-            y = (fy * m.heightPixels).toFloat()
-        } else {
-            val px = b.optDouble("x", -1.0)
-            val py = b.optDouble("y", -1.0)
-            if (px < 0 || py < 0) return json(JSONObject().put("error", "Give x and y in pixels."))
-            x = px.toFloat()
-            y = py.toFloat()
-        }
-        return if (svc.tap(x, y)) {
-            json(JSONObject().put("ok", true).put("message", "Tapped on your phone."))
-        } else {
-            json(JSONObject().put("error", "This phone couldn't tap. Android 7 or newer is needed."))
-        }
-    }
-
-    /**
-     * Swipes. Body: {"fx1", "fy1", "fx2", "fy2", "ms"} as fractions of the screen (a drag on the
-     * laptop's mirror), or {"dir": "up" | "down" | "left" | "right"} for a swipe across the middle.
-     */
-    private fun handleSwipe(session: IHTTPSession): Response {
-        val svc = NightLockService.instance ?: return json(JSONObject().put("error", needsAccessibility))
-        if (phoneLocked()) return json(JSONObject().put("error", lockedMsg))
-        val b = readBody(session)
-        val m = context.resources.displayMetrics
-        val w = m.widthPixels.toFloat()
-        val h = m.heightPixels.toFloat()
-        val pts: FloatArray
-        if (b.has("fx1")) {
-            val f = doubleArrayOf(
-                b.optDouble("fx1", -1.0), b.optDouble("fy1", -1.0),
-                b.optDouble("fx2", -1.0), b.optDouble("fy2", -1.0)
-            )
-            if (f.any { it < 0 || it > 1 }) {
-                return json(JSONObject().put("error", "Give fx1, fy1, fx2 and fy2 between 0 and 1."))
-            }
-            pts = floatArrayOf((f[0] * w).toFloat(), (f[1] * h).toFloat(), (f[2] * w).toFloat(), (f[3] * h).toFloat())
-        } else {
-            val cx = w / 2f
-            val cy = h / 2f
-            pts = when (b.optString("dir", "")) {
-                "up" -> floatArrayOf(cx, h * 0.8f, cx, h * 0.2f)
-                "down" -> floatArrayOf(cx, h * 0.2f, cx, h * 0.8f)
-                "left" -> floatArrayOf(w * 0.8f, cy, w * 0.2f, cy)
-                "right" -> floatArrayOf(w * 0.2f, cy, w * 0.8f, cy)
-                else -> return json(JSONObject().put("error", "Say up, down, left or right."))
-            }
-        }
-        val ms = b.optLong("ms", 300L).coerceIn(80L, 2000L)
-        return if (svc.swipe(pts[0], pts[1], pts[2], pts[3], ms)) {
-            json(JSONObject().put("ok", true).put("message", "Swiped on your phone."))
-        } else {
-            json(JSONObject().put("error", "This phone couldn't swipe. Android 7 or newer is needed."))
-        }
-    }
-
-    /** Presses Back, Home or Recents. Body: {"action": "back" | "home" | "recents"}. */
-    private fun handleNav(session: IHTTPSession): Response {
-        val svc = NightLockService.instance ?: return json(JSONObject().put("error", needsAccessibility))
-        val action = readBody(session).optString("action", "")
-        return if (svc.navigate(action)) {
-            json(JSONObject().put("ok", true).put("message", "Pressed $action."))
-        } else {
-            json(JSONObject().put("error", "Say back, home or recents."))
-        }
-    }
-
-    /** Every app that has an icon on the home screen, sorted by name. */
-    private fun handleApps(): Response {
-        val pm = context.packageManager
-        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val apps = pm.queryIntentActivities(launcher, 0)
-            .map { it.loadLabel(pm).toString() to it.activityInfo.packageName }
-            .distinctBy { it.second }
-            .sortedBy { it.first.lowercase() }
-        val list = JSONArray()
-        for ((name, pkg) in apps) {
-            list.put(JSONObject().put("name", name).put("package", pkg))
-        }
-        return json(JSONObject().put("count", apps.size).put("apps", list))
     }
 
     /**

@@ -251,5 +251,29 @@
                 android:resource="@xml/night_lock_service" />
         </service>
 
+
+        <receiver
+            android:name=".TimetableWidget"
+            android:exported="true"
+            android:label="@string/timetable_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.jarvis.control.TIMETABLE_WIDGET_REFRESH" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/timetable_widget_info" />
+        </receiver>
+
+        <service
+            android:name=".ClickInstantTileService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_menu_camera"
+            android:label="Click Instant"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

@@ -8,13 +8,13 @@
     </item>
     <item android:state_pressed="true">
         <shape android:shape="rectangle">
-            <solid android:color="#3AC4E0" />
+            <gradient android:angle="0" android:startColor="@color/press_a" android:endColor="@color/press_b" />
             <corners android:radius="12dp" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/accent" />
+            <gradient android:angle="0" android:startColor="@color/accent" android:endColor="@color/neon_blue" />
             <corners android:radius="12dp" />
         </shape>
     </item>

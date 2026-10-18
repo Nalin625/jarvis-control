@@ -7,6 +7,16 @@ android {
     namespace 'com.jarvis.control'
     compileSdk 34
 
+    // One fixed debug key for every build, so a new build can always install over the old one.
+    signingConfigs {
+        debug {
+            storeFile file('jarvis-debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
     defaultConfig {
         applicationId "com.jarvis.control"
         minSdk 26
@@ -16,6 +26,9 @@ android {
     }
 
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
         }
@@ -41,4 +54,11 @@ dependencies {
     // Lightweight embeddable HTTP server — this is what actually serves
     // /ping, /battery, /notify, etc. to your laptop.
     implementation 'org.nanohttpd:nanohttpd:2.3.1'
+
+    // Gesture camera: CameraX for the front camera, MediaPipe for hand tracking (runs on the phone).
+    implementation 'androidx.camera:camera-core:1.3.4'
+    implementation 'androidx.camera:camera-camera2:1.3.4'
+    implementation 'androidx.camera:camera-lifecycle:1.3.4'
+    implementation 'androidx.lifecycle:lifecycle-service:2.8.4'
+    implementation 'com.google.mediapipe:tasks-vision:0.10.14'
 }

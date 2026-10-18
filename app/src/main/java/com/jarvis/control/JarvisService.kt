@@ -17,6 +17,9 @@ class JarvisService : Service() {
         const val SERVICE_CHANNEL_ID = "jarvis_service"
         const val NOTIFY_CHANNEL_ID = "jarvis_notifications"
         const val ACTION_TOKEN_EXTRA = "token"
+
+        /** True while the control server is up (read by the Quick Settings tile). */
+        @Volatile var running = false
     }
 
     override fun onCreate() {
@@ -51,12 +54,19 @@ class JarvisService : Service() {
             server?.token = token
         }
 
+        running = true
+        JarvisTileService.refresh(this)
+
+        // send any phone-start events the laptop has not confirmed yet (e.g. it was off at boot)
+        Thread { PhoneStartReporter.deliver(applicationContext, 10, 30_000L) }.start()
         return START_STICKY
     }
 
     override fun onDestroy() {
         server?.stop()
         server = null
+        running = false
+        JarvisTileService.refresh(this)
         super.onDestroy()
     }
 

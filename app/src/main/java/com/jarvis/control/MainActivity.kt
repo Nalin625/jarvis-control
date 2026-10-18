@@ -408,6 +408,7 @@ class MainActivity : AppCompatActivity() {
         // ---- pages: Hub (home, with five orbs), Deck, Link, Core, Setup and Phone ----
         buildHub()
         buildStatusStrip()
+        buildQuickSwitches()
         buildDeck()
         buildPhone()
         buildThemeCard()
@@ -940,6 +941,139 @@ class MainActivity : AppCompatActivity() {
 
     /** Feature 3: a live strip on Home with the laptop's battery, load and IPs (refreshes every 30 s). */
     private var statusStrip: android.widget.TextView? = null
+
+
+    // ---- quick switches under the stats: SERVER, MIC, NOTIFS, HOME ----
+    private val swBox = arrayOfNulls<android.widget.LinearLayout>(4)
+    private val swState = arrayOfNulls<android.widget.TextView>(4)
+
+    private fun buildQuickSwitches() {
+        val head = android.widget.TextView(this).apply {
+            text = "QUICK SWITCHES"
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_faint))
+            textSize = 10f
+            letterSpacing = 0.2f
+            typeface = android.graphics.Typeface.MONOSPACE
+            setPadding(dpf(4f).toInt(), dpf(18f).toInt(), 0, dpf(8f).toInt())
+        }
+        binding.homeColumn.addView(head)
+        val row = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
+        val defs = listOf(
+            Triple("⚡", "SERVER", { toggleServerSwitch() }),
+            Triple("🎤", "MIC", { toggleMicSwitch() }),
+            Triple("🔔", "NOTIFS", { toggleNotifSwitch() }),
+            Triple("🏠", "HOME", { openHomeSetting() })
+        )
+        for (i in defs.indices) {
+            val d = defs[i]
+            val box = android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                gravity = android.view.Gravity.CENTER
+                setBackgroundResource(R.drawable.bg_tile)
+                val pd = dpf(10f).toInt()
+                setPadding(pd, pd, pd, pd)
+                isClickable = true
+                setOnClickListener { d.third() }
+            }
+            box.addView(android.widget.TextView(this).apply { text = d.first; textSize = 22f; gravity = android.view.Gravity.CENTER })
+            box.addView(android.widget.TextView(this).apply {
+                text = d.second
+                textSize = 10f
+                letterSpacing = 0.15f
+                typeface = android.graphics.Typeface.MONOSPACE
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_dim))
+                gravity = android.view.Gravity.CENTER
+            })
+            val st = android.widget.TextView(this).apply {
+                text = "..."
+                textSize = 12f
+                typeface = android.graphics.Typeface.create("monospace", android.graphics.Typeface.BOLD)
+                gravity = android.view.Gravity.CENTER
+            }
+            box.addView(st)
+            Fx.press(box)
+            swBox[i] = box
+            swState[i] = st
+            val lp = android.widget.LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            lp.marginStart = dpf(if (i == 0) 0f else 4f).toInt()
+            lp.marginEnd = dpf(if (i == defs.size - 1) 0f else 4f).toInt()
+            row.addView(box, lp)
+        }
+        binding.homeColumn.addView(row)
+        refreshQuickSwitches()
+    }
+
+    private fun notifAccessGranted(): Boolean = NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
+
+    private fun isDefaultHome(): Boolean {
+        val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val ri = packageManager.resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY)
+        return ri?.activityInfo?.packageName == packageName
+    }
+
+    private fun setSwitch(i: Int, on: Boolean, onText: String, offText: String) {
+        val st = swState[i] ?: return
+        st.text = if (on) onText else offText
+        st.setTextColor(ContextCompat.getColor(this, if (on) R.color.success else R.color.text_dim))
+        swBox[i]?.alpha = if (on) 1f else 0.8f
+    }
+
+    private fun refreshQuickSwitches() {
+        if (swBox[0] == null) return
+        setSwitch(0, JarvisService.running || serviceRunning, "ON", "OFF")
+        setSwitch(1, prefs.getBoolean("wake_listen", false) && MicService.hasPermission(this), "ON", "OFF")
+        setSwitch(2, prefs.getBoolean("notif_forward_enabled", false) && notifAccessGranted(), "ON", "OFF")
+        setSwitch(3, isDefaultHome(), "SET ✔", "SET")
+    }
+
+    private fun toggleServerSwitch() {
+        if (JarvisService.running || serviceRunning) stopJarvisService() else startJarvisService()
+        binding.root.postDelayed({ refreshQuickSwitches() }, 600)
+    }
+
+    private fun toggleMicSwitch() {
+        val on = prefs.getBoolean("wake_listen", false) && MicService.hasPermission(this)
+        if (on) {
+            MicService.setListening(this, false)
+            Toast.makeText(this, "Phone mic is off.", Toast.LENGTH_SHORT).show()
+        } else if (!MicService.hasPermission(this)) {
+            micPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            MicService.start(this)
+            MicService.setListening(this, true)
+            Toast.makeText(this, "Listening for the wake word.", Toast.LENGTH_SHORT).show()
+        }
+        binding.root.postDelayed({ refreshQuickSwitches() }, 600)
+    }
+
+    private fun toggleNotifSwitch() {
+        val on = prefs.getBoolean("notif_forward_enabled", false) && notifAccessGranted()
+        if (on) {
+            binding.notifForwardCheck.isChecked = false
+            prefs.edit().putBoolean("notif_forward_enabled", false).apply()
+            Toast.makeText(this, "Notifications are no longer sent to the laptop.", Toast.LENGTH_SHORT).show()
+        } else if (!notifAccessGranted()) {
+            Toast.makeText(this, "Allow Jarvis in the list, then come back.", Toast.LENGTH_LONG).show()
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        } else {
+            binding.notifForwardCheck.isChecked = true
+            prefs.edit().putBoolean("notif_forward_enabled", true).apply()
+            Toast.makeText(this, "Notifications go to the laptop.", Toast.LENGTH_SHORT).show()
+        }
+        binding.root.postDelayed({ refreshQuickSwitches() }, 300)
+    }
+
+    private fun openHomeSetting() {
+        if (isDefaultHome()) {
+            Toast.makeText(this, "Jarvis is already your home screen.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Open Settings > Apps > Default apps > Home app", Toast.LENGTH_LONG).show()
+        }
+    }
 
     private fun buildStatusStrip() {
         val tv = android.widget.TextView(this).apply {
@@ -1528,6 +1662,7 @@ class MainActivity : AppCompatActivity() {
         // so re-check every time the user comes back to this activity
         updateNotifAccessLabel()
         updateScreenUi()
+        refreshQuickSwitches()
         FindPhone.stop(this)  // opening the app silences "find my phone"
         // catch up on phone-start events the laptop has not confirmed yet
         Thread { PhoneStartReporter.flush(applicationContext) }.start()

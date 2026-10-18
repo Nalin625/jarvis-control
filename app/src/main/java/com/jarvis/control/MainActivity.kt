@@ -428,6 +428,7 @@ class MainActivity : AppCompatActivity() {
             }
         })
         Fx.attachAll(binding.root)
+        HomeDrawer.attach(this, binding.reactorView)
         if (savedInstanceState == null) enterPage(pageIndex)
     }
 

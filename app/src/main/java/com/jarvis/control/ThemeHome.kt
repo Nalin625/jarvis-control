@@ -1,6 +1,8 @@
 package com.jarvis.control
 
 import android.Manifest
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.content.ComponentName
 import android.content.Context
@@ -85,6 +87,9 @@ private val C_CORAL = 0xFFFF7A5C.toInt()
 private val C_DIM = 0xFF8FA6AE.toInt()
 private val C_WHITE = 0xFFEAF7FB.toInt()
 private val C_BG = 0xFF03080D.toInt()
+
+/** The intro plays once per app start, not every time you come back to the home screen. */
+private var introPlayed = false
 
 /** Thin line icons drawn with paths: no emoji, same look on every phone. Drawn on a 24x24 grid. */
 object Hud {
@@ -769,6 +774,94 @@ class DockCarouselView(ctx: Context) : View(ctx) {
 }
 
 /** Home screen: three pages (home, notes, phone tools). Swipe sideways to move between them. */
+/** Start-up animation: rings draw in, the JARVIS mark rotates, then "MADE BY NALIN" types out. Tap to skip. */
+class IntroView(ctx: Context) : View(ctx) {
+    private val d = resources.displayMetrics.density
+    private var t = 0f
+    private var angle = 0f
+    private var done = false
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f * d; color = C_CYAN; strokeCap = Paint.Cap.ROUND }
+    private val dim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1f * d; color = 0x553FD7F0.toInt() }
+    private val core = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = C_CYAN }
+    private val title = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C_WHITE; textAlign = Paint.Align.CENTER; typeface = Typeface.create("sans-serif-light", Typeface.NORMAL); textSize = 30f * d; letterSpacing = 0.35f }
+    private val sub = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C_CYAN; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD; textSize = 13f * d; letterSpacing = 0.3f }
+    private val hint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C_DIM; textAlign = Paint.Align.CENTER; textSize = 11f * d }
+    private val anim = ValueAnimator.ofFloat(0f, 1f).apply {
+        duration = 3200L
+        interpolator = LinearInterpolator()
+        addUpdateListener { t = it.animatedValue as Float; angle = t * 540f; alpha = 1f - seg(0.9f, 1f); invalidate() }
+        addListener(object : AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: Animator) { finish() }
+        })
+    }
+
+    init {
+        isClickable = true
+        setOnClickListener { anim.cancel(); finish() }
+        setBackgroundColor(C_BG)
+    }
+
+    fun start() { anim.start() }
+
+    private fun finish() {
+        if (done) return
+        done = true
+        (parent as? ViewGroup)?.removeView(this)
+    }
+
+    private fun seg(a: Float, b: Float): Float = ((t - a) / (b - a)).coerceIn(0f, 1f)
+
+    override fun onDraw(c: Canvas) {
+        super.onDraw(c)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val cx = w / 2f
+        val cy = h * 0.42f
+        val r = min(w, h) * 0.20f
+        val draw = seg(0f, 0.35f)
+        val oval = RectF()
+
+        // outer ring draws in, with ticks that light up one by one
+        oval.set(cx - r, cy - r, cx + r, cy + r)
+        c.drawArc(oval, -90f, 360f * draw, false, dim)
+        for (i in 0 until 36) {
+            if (i > 36 * draw) break
+            val a = Math.toRadians((angle * 0.3 + i * 10).toDouble())
+            c.drawLine(cx + (r * 0.92f * cos(a)).toFloat(), cy + (r * 0.92f * sin(a)).toFloat(),
+                cx + (r * 1.0f * cos(a)).toFloat(), cy + (r * 1.0f * sin(a)).toFloat(), ring)
+        }
+
+        // middle ring: three rotating arcs
+        val rm = r * 0.76f
+        oval.set(cx - rm, cy - rm, cx + rm, cy + rm)
+        for (i in 0 until 3) {
+            c.drawArc(oval, angle + i * 120f, 80f * draw, false, ring)
+        }
+
+        // inner ring counter-rotates
+        val ri = r * 0.52f
+        oval.set(cx - ri, cy - ri, cx + ri, cy + ri)
+        c.drawArc(oval, -angle * 1.5f, 260f * draw, false, ring)
+
+        // core pulses in
+        val pulse = 0.6f + 0.4f * draw
+        core.alpha = (255 * draw).toInt()
+        c.drawCircle(cx, cy, r * 0.20f * pulse, core)
+
+        // JARVIS, letters fade in
+        val tAlpha = (255 * seg(0.30f, 0.60f)).toInt()
+        title.alpha = tAlpha
+        c.drawText("JARVIS", cx, cy + r + 52f * d, title)
+
+        // MADE BY NALIN, typed out
+        val full = "MADE BY NALIN"
+        val shown = (full.length * seg(0.55f, 0.85f)).toInt()
+        c.drawText(full.substring(0, shown), cx, cy + r + 84f * d, sub)
+
+        if (t > 0.5f) c.drawText("tap to skip", cx, h - 40f * d, hint)
+    }
+}
+
 class ThemeHomeActivity : AppCompatActivity() {
 
     private class Act(val label: String, val kind: String, val action: () -> Unit)
@@ -867,7 +960,9 @@ class ThemeHomeActivity : AppCompatActivity() {
 
         drawerList = ListView(this)
         drawerList.divider = null
-        drawerList.isVerticalScrollBarEnabled = false
+        drawerList.isVerticalScrollBarEnabled = true
+        drawerList.isFastScrollEnabled = true
+        drawerList.overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
         drawerList.adapter = object : BaseAdapter() {
             override fun getCount(): Int = shownApps.size
             override fun getItem(position: Int): Any = shownApps[position]
@@ -947,7 +1042,8 @@ class ThemeHomeActivity : AppCompatActivity() {
     private fun onSwipe(dx: Float, dy: Float, vx: Float, vy: Float) {
         val h = resources.displayMetrics.heightPixels
         if (drawerVisible) {
-            if (vy > 1200f && Math.abs(dy) > 120 * dens) hideDrawer()
+            val listTop = IntArray(2).also { drawerList.getLocationOnScreen(it) }[1]
+            if (vy > 1200f && Math.abs(dy) > 120 * dens && swipeStartY < listTop) hideDrawer()
             return
         }
         if (Math.abs(vx) > Math.abs(vy) * 1.2f && Math.abs(vx) > 900f && Math.abs(dx) > 60 * dens) {
@@ -1046,6 +1142,12 @@ class ThemeHomeActivity : AppCompatActivity() {
         root.addView(drawer, FrameLayout.LayoutParams(matchParent, matchParent))
 
         setContentView(root)
+        if (!introPlayed) {
+            introPlayed = true
+            val intro = IntroView(this)
+            root.addView(intro, FrameLayout.LayoutParams(matchParent, matchParent))
+            intro.start()
+        }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (drawerVisible) hideDrawer() else if (page != 0) setPage(0)

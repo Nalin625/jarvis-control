@@ -38,7 +38,9 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
+import android.text.Editable
 import android.text.TextUtils
+import android.text.TextWatcher
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.KeyEvent
@@ -50,7 +52,9 @@ import android.view.ViewGroup
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.LinearInterpolator
 import android.view.inputmethod.InputMethodManager
+import android.widget.BaseAdapter
 import android.widget.EditText
+import android.widget.ListView
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -826,6 +830,112 @@ class ThemeHomeActivity : AppCompatActivity() {
         }
     }
 
+    // ---- app drawer: swipe up from the home screen (search + alphabetical list) ----
+
+    private lateinit var drawer: LinearLayout
+    private lateinit var drawerList: ListView
+    private lateinit var drawerSearch: EditText
+    private var drawerVisible = false
+    private var allApps: List<Pair<String, String>> = emptyList()
+    private var shownApps: List<Pair<String, String>> = emptyList()
+
+    private fun buildDrawer(): LinearLayout {
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setBackgroundColor(0xFA03080D.toInt())
+        box.setPadding(dp(16), dp(14), dp(16), dp(10))
+        box.isClickable = true
+
+        drawerSearch = EditText(this)
+        drawerSearch.hint = "Search apps"
+        drawerSearch.setHintTextColor(C_DIM)
+        drawerSearch.setTextColor(C_WHITE)
+        drawerSearch.textSize = 15f
+        drawerSearch.isSingleLine = true
+        drawerSearch.setPadding(dp(14), dp(10), dp(14), dp(10))
+        drawerSearch.background = panel(12f)
+        drawerSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {
+                filterApps(s?.toString() ?: "")
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+        box.addView(drawerSearch, LinearLayout.LayoutParams(matchParent, wrap))
+
+        drawerList = ListView(this)
+        drawerList.divider = null
+        drawerList.isVerticalScrollBarEnabled = false
+        drawerList.adapter = object : BaseAdapter() {
+            override fun getCount(): Int = shownApps.size
+            override fun getItem(position: Int): Any = shownApps[position]
+            override fun getItemId(position: Int): Long = position.toLong()
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+                val tv = (convertView as? TextView) ?: TextView(this@ThemeHomeActivity).apply {
+                    textSize = 17f
+                    setTextColor(C_WHITE)
+                    setPadding(dp(8), dp(12), dp(8), dp(12))
+                }
+                tv.text = shownApps[position].first
+                return tv
+            }
+        }
+        drawerList.setOnItemClickListener { _, _, pos, _ ->
+            val pkg = shownApps.getOrNull(pos)?.second
+            if (pkg != null) {
+                hideDrawer()
+                packageManager.getLaunchIntentForPackage(pkg)?.let { openApp(it) }
+            }
+        }
+        box.addView(drawerList, LinearLayout.LayoutParams(matchParent, 0, 1f).apply { topMargin = dp(10) })
+
+        val close = TextView(this)
+        close.text = "CLOSE"
+        close.gravity = Gravity.CENTER
+        close.textSize = 10f
+        close.typeface = Typeface.DEFAULT_BOLD
+        close.letterSpacing = 0.2f
+        close.setTextColor(C_CYAN)
+        close.setPadding(0, dp(10), 0, dp(6))
+        close.setOnClickListener { hideDrawer() }
+        box.addView(close, LinearLayout.LayoutParams(matchParent, wrap))
+        return box
+    }
+
+    private fun loadApps() {
+        val pm = packageManager
+        allApps = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+            .map { Pair(it.loadLabel(pm).toString(), it.activityInfo.packageName) }
+            .distinctBy { it.second }
+            .sortedBy { it.first.lowercase(Locale.getDefault()) }
+    }
+
+    private fun filterApps(q: String) {
+        shownApps = if (q.isBlank()) allApps else allApps.filter { it.first.contains(q, ignoreCase = true) }
+        (drawerList.adapter as? BaseAdapter)?.notifyDataSetChanged()
+    }
+
+    private fun showDrawer() {
+        if (drawerVisible) return
+        drawerVisible = true
+        loadApps()
+        drawerSearch.setText("")
+        filterApps("")
+        drawer.visibility = View.VISIBLE
+        drawer.translationY = resources.displayMetrics.heightPixels.toFloat()
+        drawer.animate().translationY(0f).setDuration(240L).setInterpolator(DecelerateInterpolator(1.6f)).start()
+    }
+
+    private fun hideDrawer() {
+        if (!drawerVisible) return
+        drawerVisible = false
+        drawer.animate()
+            .translationY(resources.displayMetrics.heightPixels.toFloat())
+            .setDuration(200L)
+            .withEndAction { drawer.visibility = View.INVISIBLE }
+            .start()
+    }
+
     private var swipeVt: VelocityTracker? = null
     private var swipeStartX = 0f
     private var swipeStartY = 0f
@@ -834,12 +944,16 @@ class ThemeHomeActivity : AppCompatActivity() {
     /** Sideways swipes move between pages; a swipe up from the bottom opens all apps; a swipe down from the top refreshes. */
     private fun onSwipe(dx: Float, dy: Float, vx: Float, vy: Float) {
         val h = resources.displayMetrics.heightPixels
+        if (drawerVisible) {
+            if (vy > 1200f && Math.abs(dy) > 120 * dens) hideDrawer()
+            return
+        }
         if (Math.abs(vx) > Math.abs(vy) * 1.2f && Math.abs(vx) > 900f && Math.abs(dx) > 60 * dens) {
             setPage(if (vx < 0) page + 1 else page - 1)
             return
         }
-        if (vy < -1200f && swipeStartY > h * 0.75f && Math.abs(dy) > 120 * dens) {
-            dial.performLongClick()
+        if (vy < -1200f && Math.abs(dy) > 120 * dens) {
+            showDrawer()
             return
         }
         if (vy > 1200f && swipeStartY < h * 0.25f) {
@@ -925,10 +1039,14 @@ class ThemeHomeActivity : AppCompatActivity() {
         }
         content.addView(pager, LinearLayout.LayoutParams(matchParent, wrap))
 
+        drawer = buildDrawer()
+        drawer.visibility = View.INVISIBLE
+        root.addView(drawer, FrameLayout.LayoutParams(matchParent, matchParent))
+
         setContentView(root)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (page != 0) setPage(0)
+                if (drawerVisible) hideDrawer() else if (page != 0) setPage(0)
             }
         })
         HomeDrawer.attach(this, dial)
@@ -998,13 +1116,10 @@ class ThemeHomeActivity : AppCompatActivity() {
 
     // ---- page 1: home ----
 
-    private fun buildHome(): ScrollView {
-        val scroll = ScrollView(this)
-        scroll.isVerticalScrollBarEnabled = false
+    private fun buildHome(): LinearLayout {
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(12), dp(4), dp(12), dp(14))
-        scroll.addView(col)
 
         // header: JARVIS between two rules
         val head = LinearLayout(this)
@@ -1081,8 +1196,7 @@ class ThemeHomeActivity : AppCompatActivity() {
         dial.onActivate = { i -> actions.getOrNull(i)?.action?.invoke() }
         dial.onSelectChanged = { i -> selTv.text = "▲ " + (actions.getOrNull(i)?.label ?: "") }
         selTv.text = "▲ " + actions[0].label
-        val side = resources.displayMetrics.widthPixels - dp(24)
-        col.addView(dial, LinearLayout.LayoutParams(matchParent, side))
+        col.addView(dial, LinearLayout.LayoutParams(matchParent, 0, 1f).apply { topMargin = dp(4); bottomMargin = dp(4) })
 
         // dock: an endless carousel inside a rounded pill
         dock = DockCarouselView(this)
@@ -1097,7 +1211,7 @@ class ThemeHomeActivity : AppCompatActivity() {
         }
         pill.addView(dock, FrameLayout.LayoutParams(matchParent, matchParent))
         col.addView(pill, LinearLayout.LayoutParams(matchParent, dp(84)).apply { topMargin = dp(8) })
-        return scroll
+        return col
     }
 
     // ---- page 2: notes (phone only, never sent to the laptop) ----
@@ -1255,7 +1369,7 @@ class ThemeHomeActivity : AppCompatActivity() {
             Act("DISPLAY", "display") { openSettings(Intent(Settings.ACTION_DISPLAY_SETTINGS)) },
             Act("DO NOT DISTURB", "moon") { openSettings(Intent("android.settings.ZEN_MODE_SETTINGS")) },
             Act("BATTERY SAVER", "battery") { openSettings(Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)) },
-            Act("ALL APPS", "apps") { dial.performLongClick() }
+            Act("ALL APPS", "apps") { showDrawer() }
         )
         items.chunked(2).forEach { pair ->
             val row = LinearLayout(this)

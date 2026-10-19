@@ -57,6 +57,7 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
                 "/battery" -> handleBattery()
                 "/status" -> handleStatus()
                 "/ai/start" -> handleAiStart()
+                "/ai/stop" -> handleAiStop()
                 "/mic/start" -> handleMicStart()
                 "/mic/stop" -> handleMicStop()
                 "/mic/once" -> handleMicOnce()
@@ -194,6 +195,13 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
         val p = context.getSharedPreferences("jarvis_control", Context.MODE_PRIVATE)
         val cmd = p.getString("termux_command", null)?.takeIf { it.isNotBlank() } ?: TermuxLauncher.DEFAULT_COMMAND
         val err = TermuxLauncher.run(context.applicationContext, cmd)
+        return if (err == null) json(JSONObject().put("ok", true))
+        else json(JSONObject().put("error", err), Response.Status.INTERNAL_ERROR)
+    }
+
+    /** Stops the Ollama server in Termux. Called when the laptop shuts down. Needs 'procps' in Termux (pkg install procps). */
+    private fun handleAiStop(): Response {
+        val err = TermuxLauncher.run(context.applicationContext, "pkill -f 'ollama serve' || true")
         return if (err == null) json(JSONObject().put("ok", true))
         else json(JSONObject().put("error", err), Response.Status.INTERNAL_ERROR)
     }

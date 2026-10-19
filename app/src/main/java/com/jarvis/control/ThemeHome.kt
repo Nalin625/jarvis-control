@@ -88,8 +88,6 @@ private val C_DIM = 0xFF8FA6AE.toInt()
 private val C_WHITE = 0xFFEAF7FB.toInt()
 private val C_BG = 0xFF03080D.toInt()
 
-/** The intro plays once per app start, not every time you come back to the home screen. */
-private var introPlayed = false
 
 /** Thin line icons drawn with paths: no emoji, same look on every phone. Drawn on a 24x24 grid. */
 object Hud {
@@ -1142,12 +1140,10 @@ class ThemeHomeActivity : AppCompatActivity() {
         root.addView(drawer, FrameLayout.LayoutParams(matchParent, matchParent))
 
         setContentView(root)
-        if (!introPlayed) {
-            introPlayed = true
-            val intro = IntroView(this)
-            root.addView(intro, FrameLayout.LayoutParams(matchParent, matchParent))
-            intro.start()
-        }
+        // the intro plays every time the home screen is opened fresh (not when you come back to it from another app)
+        val intro = IntroView(this)
+        root.addView(intro, FrameLayout.LayoutParams(matchParent, matchParent))
+        intro.start()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (drawerVisible) hideDrawer() else if (page != 0) setPage(0)

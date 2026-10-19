@@ -28,7 +28,7 @@ class ShareReceiverActivity : Activity() {
         val port = prefs.getString("laptop_port", "8899").orEmpty().ifEmpty { "8899" }
         val token = prefs.getString("laptop_token", "").orEmpty()
 
-        if (text.isBlank()) { toast("Nothing to send"); finish(); return }
+        if (text.isBlank()) { finish(); return }
         if (ip.isEmpty()) { toast("Set the laptop IP in Jarvis Control first"); finish(); return }
 
         Thread {

@@ -792,7 +792,9 @@ class ThemeHomeActivity : AppCompatActivity() {
     private lateinit var batTv: TextView
     private lateinit var dateTv: TextView
     private lateinit var laptopTv: TextView
-    private lateinit var uptimeTv: TextView
+    private lateinit var weatherTv: TextView
+    private var weatherText = "--"
+    private var weatherAt = 0L
     private lateinit var netTv: TextView
     private lateinit var powerTv: TextView
     private lateinit var notesCountTv: TextView
@@ -1157,7 +1159,15 @@ class ThemeHomeActivity : AppCompatActivity() {
         tiles.orientation = LinearLayout.HORIZONTAL
         dateTv = tile(tiles, "DATE")
         laptopTv = tile(tiles, "LAPTOP")
-        uptimeTv = tile(tiles, "PHONE UPTIME")
+        weatherTv = tile(tiles, "WEATHER")
+        weatherTv.setOnClickListener {
+            if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION), 77)
+            } else {
+                weatherAt = 0L
+                refreshWeather()
+            }
+        }
         col.addView(tiles, LinearLayout.LayoutParams(matchParent, wrap).apply { topMargin = dp(8) })
 
         // phone strip: network, power, notes count, free storage
@@ -1460,6 +1470,65 @@ class ThemeHomeActivity : AppCompatActivity() {
     }
 
     /** A tile with a small label above a value. */
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 77) refreshWeather()
+    }
+
+    // Weather from Open-Meteo (free, no key). Uses the phone's last known location; refreshes at most every 30 minutes.
+    private fun refreshWeather() {
+        if (!::weatherTv.isInitialized) return
+        if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            weatherTv.text = "Tap to allow"
+            return
+        }
+        if (weatherText != "--" && System.currentTimeMillis() - weatherAt < 30 * 60 * 1000L) {
+            weatherTv.text = weatherText
+            return
+        }
+        io.execute {
+            val text = try {
+                val lm = getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+                val loc = listOf(
+                    android.location.LocationManager.NETWORK_PROVIDER,
+                    android.location.LocationManager.PASSIVE_PROVIDER,
+                    android.location.LocationManager.GPS_PROVIDER
+                ).mapNotNull { try { lm.getLastKnownLocation(it) } catch (e: SecurityException) { null } }
+                    .maxByOrNull { it.time }
+                if (loc == null) {
+                    "No location"
+                } else {
+                    val url = "https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&current_weather=true"
+                    val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                    conn.connectTimeout = 8000
+                    conn.readTimeout = 8000
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+                    conn.disconnect()
+                    val cw = org.json.JSONObject(body).getJSONObject("current_weather")
+                    "${cw.getDouble("temperature").toInt()}\u00B0C " + weatherWord(cw.getInt("weathercode"))
+                }
+            } catch (e: Exception) {
+                "Offline"
+            }
+            ui.post {
+                weatherText = text
+                weatherAt = System.currentTimeMillis()
+                if (!isFinishing) weatherTv.text = text
+            }
+        }
+    }
+
+    private fun weatherWord(code: Int): String = when (code) {
+        0 -> "Clear"
+        1, 2 -> "Partly"
+        3 -> "Cloudy"
+        45, 48 -> "Fog"
+        71, 73, 75, 77, 85, 86 -> "Snow"
+        95, 96, 99 -> "Storm"
+        51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82 -> "Rain"
+        else -> "Drizzle"
+    }
+
     private fun tile(parent: LinearLayout, label: String): TextView {
         val box = LinearLayout(this)
         box.orientation = LinearLayout.VERTICAL
@@ -1783,8 +1852,7 @@ class ThemeHomeActivity : AppCompatActivity() {
         } catch (e: Exception) {
             "--"
         }
-        val up = SystemClock.elapsedRealtime() / 1000
-        uptimeTv.text = "${up / 86400}d ${(up % 86400) / 3600}h"
+        refreshWeather()
 
         if (!LaptopApi.paired(this)) {
             laptopTv.text = "Not linked"

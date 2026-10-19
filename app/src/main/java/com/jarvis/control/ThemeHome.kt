@@ -826,37 +826,54 @@ class ThemeHomeActivity : AppCompatActivity() {
         }
     }
 
-    /** Sideways flings move between pages; a fling up from the bottom opens all apps. */
-    private val flings by lazy {
-        GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDown(e: MotionEvent): Boolean = true
+    private var swipeVt: VelocityTracker? = null
+    private var swipeStartX = 0f
+    private var swipeStartY = 0f
+    private var swipeIgnored = false
 
-            override fun onFling(e1: MotionEvent?, e2: MotionEvent?, vx: Float, vy: Float): Boolean {
-                if (e1 == null || e2 == null) return false
-                if (startedIn(dial, e1) || startedIn(dock, e1)) return false
-                val dx = e2.x - e1.x
-                val dy = e2.y - e1.y
-                val h = resources.displayMetrics.heightPixels
-                if (Math.abs(vx) > Math.abs(vy) * 1.2f && Math.abs(vx) > 900f && Math.abs(dx) > 60 * dens) {
-                    setPage(if (vx < 0) page + 1 else page - 1)
-                    return true
-                }
-                if (vy < -1200f && e1.rawY > h * 0.75f && Math.abs(dy) > 120 * dens) {
-                    dial.performLongClick()
-                    return true
-                }
-                if (vy > 1200f && e1.rawY < h * 0.25f) {
-                    refreshStats()
-                    toast("Refreshed")
-                    return true
-                }
-                return false
-            }
-        })
+    /** Sideways swipes move between pages; a swipe up from the bottom opens all apps; a swipe down from the top refreshes. */
+    private fun onSwipe(dx: Float, dy: Float, vx: Float, vy: Float) {
+        val h = resources.displayMetrics.heightPixels
+        if (Math.abs(vx) > Math.abs(vy) * 1.2f && Math.abs(vx) > 900f && Math.abs(dx) > 60 * dens) {
+            setPage(if (vx < 0) page + 1 else page - 1)
+            return
+        }
+        if (vy < -1200f && swipeStartY > h * 0.75f && Math.abs(dy) > 120 * dens) {
+            dial.performLongClick()
+            return
+        }
+        if (vy > 1200f && swipeStartY < h * 0.25f) {
+            refreshStats()
+            toast("Refreshed")
+        }
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        flings.onTouchEvent(ev)
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                swipeVt?.recycle()
+                swipeVt = VelocityTracker.obtain()
+                swipeVt?.addMovement(ev)
+                swipeStartX = ev.rawX
+                swipeStartY = ev.rawY
+                swipeIgnored = startedIn(dial, ev) || startedIn(dock, ev)
+            }
+            MotionEvent.ACTION_MOVE -> swipeVt?.addMovement(ev)
+            MotionEvent.ACTION_UP -> {
+                val vt = swipeVt
+                vt?.addMovement(ev)
+                vt?.computeCurrentVelocity(1000)
+                val vx = vt?.xVelocity ?: 0f
+                val vy = vt?.yVelocity ?: 0f
+                vt?.recycle()
+                swipeVt = null
+                if (!swipeIgnored) onSwipe(ev.rawX - swipeStartX, ev.rawY - swipeStartY, vx, vy)
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                swipeVt?.recycle()
+                swipeVt = null
+            }
+        }
         return super.dispatchTouchEvent(ev)
     }
 

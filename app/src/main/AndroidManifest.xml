@@ -75,11 +75,6 @@
             android:launchMode="singleTask"
             android:exported="true"
             android:label="Jarvis Control">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.HOME" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
         </activity>
 
         <activity
@@ -276,5 +271,19 @@
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
+    
+        <activity
+            android:name=".ThemeHomeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:label="Jarvis Home"
+            android:stateNotNeeded="true"
+            android:theme="@style/Theme.JarvisControl">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

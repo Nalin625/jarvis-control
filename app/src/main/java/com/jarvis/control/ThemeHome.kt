@@ -1141,9 +1141,7 @@ class ThemeHomeActivity : AppCompatActivity() {
 
         setContentView(root)
         // the intro plays every time the home screen is opened fresh (not when you come back to it from another app)
-        val intro = IntroView(this)
-        root.addView(intro, FrameLayout.LayoutParams(matchParent, matchParent))
-        intro.start()
+        rootView = root
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (drawerVisible) hideDrawer() else if (page != 0) setPage(0)
@@ -1154,8 +1152,28 @@ class ThemeHomeActivity : AppCompatActivity() {
         pagesHolder.post { setPage(0, false) }
     }
 
+    // The intro plays on the first show and again every time the home screen comes back after being stopped (screen off, unlock, app switch).
+    private var introDue = true
+    private lateinit var rootView: FrameLayout
+
+    private fun playIntro() {
+        if (!::rootView.isInitialized) return
+        val intro = IntroView(this)
+        rootView.addView(intro, FrameLayout.LayoutParams(matchParent, matchParent))
+        intro.start()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        introDue = true
+    }
+
     override fun onResume() {
         super.onResume()
+        if (introDue) {
+            introDue = false
+            playIntro()
+        }
         refreshSwitches()
         updateDate()
         ui.removeCallbacks(dateTick)

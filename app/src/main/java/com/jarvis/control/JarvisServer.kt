@@ -58,6 +58,7 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
                 "/status" -> handleStatus()
                 "/ai/start" -> handleAiStart()
                 "/ai/stop" -> handleAiStop()
+                "/sms/send" -> handleSmsSend(session)
                 "/mic/start" -> handleMicStart()
                 "/mic/stop" -> handleMicStop()
                 "/mic/once" -> handleMicOnce()
@@ -200,6 +201,30 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
     }
 
     /** Stops the Ollama server in Termux. Called when the laptop shuts down. Needs 'procps' in Termux (pkg install procps). */
+    /** Sends one text message. The laptop asks you to approve it first. Needs the SEND_SMS permission, allowed in the phone's app settings. */
+    private fun handleSmsSend(session: IHTTPSession): Response {
+        val body = readBody(session)
+        val number = body.optString("number", "").trim()
+        val message = body.optString("message", "")
+        if (number.isEmpty() || message.isEmpty()) {
+            return json(JSONObject().put("error", "Missing number or message"), Response.Status.BAD_REQUEST)
+        }
+        if (context.checkSelfPermission(android.Manifest.permission.SEND_SMS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            return json(JSONObject().put("error", "Allow text messages for Jarvis Control in the phone's app settings"), Response.Status.FORBIDDEN)
+        }
+        return try {
+            smsManager().sendTextMessage(number, null, message, null, null)
+            json(JSONObject().put("ok", true))
+        } catch (e: Exception) {
+            json(JSONObject().put("error", "Could not send: ${e.message}"), Response.Status.INTERNAL_ERROR)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun smsManager(): android.telephony.SmsManager =
+        if (Build.VERSION.SDK_INT >= 31) context.getSystemService(android.telephony.SmsManager::class.java)
+        else android.telephony.SmsManager.getDefault()
+
     private fun handleAiStop(): Response {
         val err = TermuxLauncher.run(context.applicationContext, "pkill -f 'ollama serve' || true")
         return if (err == null) json(JSONObject().put("ok", true))

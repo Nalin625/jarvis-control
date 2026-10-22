@@ -1475,37 +1475,13 @@ class ThemeHomeActivity : AppCompatActivity() {
 
     // ---- page 3: phone tools ----
 
-    private fun buildTools(): ScrollView {
-        val scroll = ScrollView(this)
-        scroll.isVerticalScrollBarEnabled = false
-        val col = LinearLayout(this)
-        col.orientation = LinearLayout.VERTICAL
-        col.setPadding(dp(14), dp(10), dp(14), dp(14))
-        scroll.addView(col)
+    private var calendarPage: CalendarPage? = null
 
-        col.addView(sectionTitle("PHONE TOOLS"), LinearLayout.LayoutParams(matchParent, wrap))
-        col.addView(subText("Shortcuts on this phone. Nothing here goes to the laptop."),
-            LinearLayout.LayoutParams(matchParent, wrap).apply { topMargin = dp(2) })
-
-        val items = listOf(
-            Act("FLASHLIGHT", "flash") { toggleTorch() },
-            Act("WI-FI", "wifi") { openSettings(wifiIntent()) },
-            Act("BLUETOOTH", "bt") { openSettings(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) },
-            Act("SOUND", "sound") { openSettings(Intent(Settings.ACTION_SOUND_SETTINGS)) },
-            Act("DISPLAY", "display") { openSettings(Intent(Settings.ACTION_DISPLAY_SETTINGS)) },
-            Act("DO NOT DISTURB", "moon") { openSettings(Intent("android.settings.ZEN_MODE_SETTINGS")) },
-            Act("BATTERY SAVER", "battery") { openSettings(Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)) },
-            Act("ALL APPS", "apps") { showDrawer() }
-        )
-        items.chunked(2).forEach { pair ->
-            val row = LinearLayout(this)
-            row.orientation = LinearLayout.HORIZONTAL
-            for (item in pair) {
-                row.addView(actionButton(item.label, item.kind, item.action), weighted(dp(4)))
-            }
-            col.addView(row, LinearLayout.LayoutParams(matchParent, wrap).apply { topMargin = dp(10) })
-        }
-        return scroll
+    /** The swipe page after NOTES: the phone's month calendar (it replaced PHONE TOOLS). */
+    private fun buildTools(): View {
+        val cal = CalendarPage(this) { v -> dp(v) }
+        calendarPage = cal
+        return cal.root
     }
 
     private fun wifiIntent(): Intent =
@@ -1589,6 +1565,7 @@ class ThemeHomeActivity : AppCompatActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 77) refreshWeather()
+        if (requestCode == 78) calendarPage?.refresh()
     }
 
     // Weather from Open-Meteo (free, no key). Uses the phone's last known location; refreshes at most every 30 minutes.

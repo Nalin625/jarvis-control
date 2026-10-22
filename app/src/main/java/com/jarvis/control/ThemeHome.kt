@@ -1337,6 +1337,7 @@ class ThemeHomeActivity : AppCompatActivity() {
         }
         pill.addView(dock, FrameLayout.LayoutParams(matchParent, matchParent))
         col.addView(pill, LinearLayout.LayoutParams(matchParent, dp(84)).apply { topMargin = dp(8) })
+        col.addView(PhoneAiSwitch(this) { dp(it) }.view, LinearLayout.LayoutParams(matchParent, wrap))
         return col
     }
 

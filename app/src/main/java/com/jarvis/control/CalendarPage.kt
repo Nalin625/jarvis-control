@@ -92,7 +92,7 @@ class CalendarPage(private val act: Activity, private val dp: (Int) -> Int) {
 
         val picked = selected.get(Calendar.DAY_OF_MONTH)
         val dayTitle = SimpleDateFormat("EEEE d MMM", Locale.getDefault()).format(selected.time)
-        view.addView(label(dayTitle.uppercase(Locale.getDefault()), cyan, 12f, bold = true).apply { topMargin = dp(10) })
+        view.addView(label(dayTitle.uppercase(Locale.getDefault()), cyan, 12f, bold = true), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
         val list = events[picked]
         if (list.isNullOrEmpty()) {
             view.addView(label("Nothing planned.", dim, 12f))

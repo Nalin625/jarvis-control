@@ -53,6 +53,24 @@ class JarvisNotificationListener : NotificationListenerService() {
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
         if (title.isBlank() && text.isBlank()) return
 
+        // Instagram DM: ask the laptop for a suggested reply. Draft only: nothing is sent from the phone.
+        // Runs only when notification forwarding is on (the early return above). The laptop decides
+        // whether to draft, and ignores group chats, duplicates, stale messages and excluded senders.
+        if (IgDraftRules.shouldRequestDraft(sbn.packageName, title, text)) {
+            val draft = JSONObject()
+                .put("package", sbn.packageName)
+                .put("title", title)
+                .put("text", text)
+                .put("ts", sbn.postTime / 1000.0)
+                .put("key", sbn.key)
+                .put("group", extras.getBoolean(IgDraftRules.GROUP_EXTRA, false))
+            Thread {
+                if (LaptopApi.paired(applicationContext)) {
+                    LaptopApi.call(applicationContext, "POST", "/instagram/draft", draft, 8000)
+                }
+            }.start()
+        }
+
         val appName = try {
             packageManager.getApplicationLabel(
                 packageManager.getApplicationInfo(sbn.packageName, 0)

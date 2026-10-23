@@ -1337,7 +1337,6 @@ class ThemeHomeActivity : AppCompatActivity() {
         }
         pill.addView(dock, FrameLayout.LayoutParams(matchParent, matchParent))
         col.addView(pill, LinearLayout.LayoutParams(matchParent, dp(84)).apply { topMargin = dp(8) })
-        col.addView(PhoneAiSwitch(this) { dp(it) }.view, LinearLayout.LayoutParams(matchParent, wrap))
         return col
     }
 
@@ -2000,7 +1999,6 @@ class ThemeHomeActivity : AppCompatActivity() {
         }
         row.visibility = View.GONE
         row.addView(cardText, LinearLayout.LayoutParams(0, wrap, 1f))
-        row.addView(plainButton("SPEAK") { speak(lastReply) })
         row.addView(plainButton("CLOSE") { hideCard() })
         return row
     }

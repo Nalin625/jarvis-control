@@ -111,7 +111,31 @@ class MicService : Service() {
         instance = this
         listening = getSharedPreferences("jarvis_control", MODE_PRIVATE).getBoolean("wake_listen", false)
         refresh()
+        handler.post(talkPoll)
         return START_STICKY
+    }
+
+    // Talk mode on the laptop: the phone keeps listening and sends each sentence without the wake word.
+    @Volatile private var talkOn = false
+    private val talkPoll = object : Runnable {
+        override fun run() {
+            val app = applicationContext
+            Thread {
+                val on = try {
+                    LaptopApi.call(app, "GET", "/talk/status", null, 4000).optBoolean("on", false)
+                } catch (e: Exception) {
+                    false
+                }
+                handler.post {
+                    if (on != talkOn) {
+                        talkOn = on
+                        setNote(if (on) "Talk mode: listening..." else "Idle")
+                        update()
+                    }
+                }
+            }.start()
+            handler.postDelayed(this, 8000)
+        }
     }
 
     fun refresh() {
@@ -126,7 +150,7 @@ class MicService : Service() {
     }
 
     private fun update() {
-        val want = (listening || once) && !paused
+        val want = (listening || once || talkOn) && !paused
         if (want && !running) begin()
         if (!want && running) stopRec()
         if (!want && !paused) setNote("Idle")
@@ -193,6 +217,11 @@ class MicService : Service() {
     private fun handleText(raw: String) {
         val text = raw.trim()
         if (text.isEmpty()) return
+        if (talkOn) {   // talk mode: every sentence is a talk turn, no wake word needed
+            once = false
+            send(text)
+            return
+        }
         val low = text.lowercase()
         if (once) {
             once = false

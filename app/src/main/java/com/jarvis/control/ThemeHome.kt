@@ -241,10 +241,10 @@ class HomeBackdrop(ctx: Context) : View(ctx) {
         val fw = w.toFloat()
         val fh = h.toFloat()
         c.drawColor(C_BG)
-        p.shader = RadialGradient(fw * 0.5f, fh * 0.6f, fh * 0.7f,
+        p.shader = RadialGradient(fw * 0.5f, fh * 0.6f, (fh * 0.7f).coerceAtLeast(1f),
             intArrayOf(0xFF0A2A3A.toInt(), 0xFF04121C.toInt(), C_BG), floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP)
         c.drawRect(0f, 0f, fw, fh, p)
-        p.shader = RadialGradient(fw * 0.5f, fh * 0.6f, fw * 0.5f,
+        p.shader = RadialGradient(fw * 0.5f, fh * 0.6f, (fw * 0.5f).coerceAtLeast(1f),
             intArrayOf(0x3D2EB0C8, 0x002EB0C8), null, Shader.TileMode.CLAMP)
         c.drawRect(0f, 0f, fw, fh, p)
         p.shader = null
@@ -481,7 +481,7 @@ class ThemeDialView(ctx: Context) : View(ctx) {
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
         val m = min(w, h).toFloat()
 
-        p.shader = RadialGradient(cx, cy, m * 0.6f,
+        p.shader = RadialGradient(cx, cy, (m * 0.6f).coerceAtLeast(1f),
             intArrayOf(0x554FE3FF, 0x00101A22, 0x00000000), floatArrayOf(0f, 0.6f, 1f), Shader.TileMode.CLAMP)
         c.drawCircle(cx, cy, m * 0.6f, p)
         p.shader = null
@@ -570,7 +570,7 @@ class ThemeDialView(ctx: Context) : View(ctx) {
         // logo core
         val core = radius * 0.5f * beat
         paint.style = Paint.Style.FILL
-        paint.shader = RadialGradient(cx, cy, core,
+        paint.shader = RadialGradient(cx, cy, core.coerceAtLeast(1f),
             intArrayOf(0xFF123E50.toInt(), 0xFF03101A.toInt()), null, Shader.TileMode.CLAMP)
         c.drawCircle(cx, cy, core, paint)
         paint.shader = null

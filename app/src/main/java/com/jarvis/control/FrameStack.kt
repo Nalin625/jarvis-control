@@ -86,9 +86,9 @@ object FrameStack {
                 if (sx < 0 || sx >= w || sy < 0 || sy >= h) continue
                 val c = f[sy * w + sx]
                 val i = y * w + x
-                sumR[i] += (c shr 16) and 0xFF
-                sumG[i] += (c shr 8) and 0xFF
-                sumB[i] += c and 0xFF
+                sumR[i] = sumR[i] + ((c shr 16) and 0xFF).toLong()
+                sumG[i] = sumG[i] + ((c shr 8) and 0xFF).toLong()
+                sumB[i] = sumB[i] + (c and 0xFF).toLong()
                 cnt[i]++
             }
         }

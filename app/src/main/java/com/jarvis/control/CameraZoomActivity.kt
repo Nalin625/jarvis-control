@@ -156,7 +156,7 @@ class CameraZoomActivity : ComponentActivity() {
             }
         }
         peakView = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.FILL_CENTER
+            scaleType = ImageView.ScaleType.CENTER_CROP
             alpha = 0.85f
             visibility = View.GONE
         }

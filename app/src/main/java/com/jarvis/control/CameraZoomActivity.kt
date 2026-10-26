@@ -45,6 +45,7 @@ class CameraZoomActivity : ComponentActivity() {
     private var imageCapture: ImageCapture? = null
     private var maxZoom = 1f
     private var lastLuma = 128.0
+    private var sceneName = "NORMAL"
     private var manualExposure = true
     private var currentIso = 200
     private var currentShutterNs = 8_333_333L   // 1/120 s
@@ -232,8 +233,8 @@ class CameraZoomActivity : ComponentActivity() {
         val shutterDenom = (1_000_000_000L / currentShutterNs).coerceAtLeast(1L)
         val exposureLine = if (manualExposure) "RULES: ISO $currentIso  shutter 1/$shutterDenom" else "AUTO: phone sets ISO and shutter"
         hud.text = String.format(
-            "ZOOM %.1fx  (phone max %.1fx)\n%s\nLEARN %s  bias %.1f\nTap the picture to focus",
-            zoomRatio, maxZoom, exposureLine, if (learner.enabled) "on" else "off", learner.bias)
+            "ZOOM %.1fx  (phone max %.1fx)\nSCENE %s\n%s\nLEARN %s  bias %.1f\nTap the picture to focus",
+            zoomRatio, maxZoom, sceneName, exposureLine, if (learner.enabled) "on" else "off", learner.bias)
     }
 
     private fun takeBurst() {
@@ -254,8 +255,10 @@ class CameraZoomActivity : ComponentActivity() {
                             val gray = decodeGray(bytes)?.first
                             val luma = gray?.let { CameraBrain.meanLuma(it) } ?: 128.0
                             val clipped = gray?.let { CameraBrain.clippedFraction(it) } ?: 0.0
+                            val scene = gray?.let { CameraBrain.classify(it) } ?: "NORMAL"
                             runOnUiThread {
                                 lastLuma = luma
+                                sceneName = scene
                                 if (manualExposure) {
                                     val cam = camera
                                     val range = cam?.let { Camera2CameraInfo.from(it.cameraInfo).getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) }
@@ -265,7 +268,7 @@ class CameraZoomActivity : ComponentActivity() {
                                         // highlights blown out: lower the ISO even if the average looks fine
                                         (currentIso / 2).coerceIn(lo, hi)
                                     } else {
-                                        CameraBrain.adjustIso(currentIso, luma, lo, hi)
+                                        CameraBrain.adjustIso(currentIso, luma, lo, hi, CameraBrain.targetFor(scene))
                                     }
                                     applyIsoShutter(currentIso, currentShutterNs)
                                 } else {

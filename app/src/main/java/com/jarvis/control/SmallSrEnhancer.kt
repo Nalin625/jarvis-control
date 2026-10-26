@@ -56,6 +56,11 @@ class SmallSrEnhancer : Enhancer {
             }
             ty += tile
         }
+        val lut = CameraBrain.toneLut()
+        for (i in outPixels.indices) {
+            val c = outPixels[i]
+            outPixels[i] = Color.rgb(lut[Color.red(c)], lut[Color.green(c)], lut[Color.blue(c)])
+        }
         val out = Bitmap.createBitmap(outPixels, w, h, Bitmap.Config.ARGB_8888)
         val bos = ByteArrayOutputStream()
         out.compress(Bitmap.CompressFormat.JPEG, 95, bos)

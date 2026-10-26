@@ -53,6 +53,7 @@ class CameraZoomActivity : ComponentActivity() {
     private var lastLuma = 128.0
     private var sceneName = "NORMAL"
     private var nightMode = false
+    private var autoRetry = false
     private var extManager: ExtensionsManager? = null
     private lateinit var nightButton: Button
     private var awbMode: Int? = null
@@ -69,7 +70,7 @@ class CameraZoomActivity : ComponentActivity() {
         CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT,
         CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT
     )
-    private var manualExposure = true
+    private var manualExposure = false   // default: the phone's own auto exposure
     private var currentIso = 200
     private var currentShutterNs = 8_333_333L   // 1/120 s
     private val work = Executors.newSingleThreadExecutor()
@@ -286,6 +287,10 @@ class CameraZoomActivity : ComponentActivity() {
             cam.cameraControl.setExposureCompensationIndex(learner.bias.roundToInt().coerceIn(r.lower, r.upper))
         }
         pushCaptureOptions()
+        if (autoRetry) {
+            autoRetry = false
+            window.decorView.postDelayed({ takeBurst() }, 1200)
+        }
     }
 
     private fun applyZoom(progress: Int) {
@@ -396,8 +401,15 @@ class CameraZoomActivity : ComponentActivity() {
                                         CameraBrain.adjustIso(currentIso, luma, lo, hi, CameraBrain.targetFor(scene))
                                     }
                                     applyIsoShutter(currentIso, currentShutterNs)
-                                } else {
-                                    adjustByRules(CameraBrain.evStep(luma))
+                                } else if (scene == "NIGHT" && !nightMode &&
+                                    extManager?.isExtensionAvailable(CameraSelector.DEFAULT_BACK_CAMERA, ExtensionMode.NIGHT) == true) {
+                                    // dark scene on auto: switch on the phone's night mode and shoot the burst again
+                                    nightMode = true
+                                    nightButton.text = nightLabel()
+                                    autoRetry = true
+                                    Toast.makeText(this@CameraZoomActivity, "Dark scene: night mode on, shooting again", Toast.LENGTH_SHORT).show()
+                                    startCamera()
+                                    return@runOnUiThread
                                 }
                                 updateHud()
                                 window.decorView.postDelayed({ shoot() }, 350)

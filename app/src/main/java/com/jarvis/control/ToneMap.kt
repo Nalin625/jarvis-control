@@ -1,6 +1,8 @@
 package com.jarvis.control
 
 import kotlin.math.exp
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.pow
 
 /** Highlight recovery and shadow lift from one picture (exposure fusion, after Mertens).
@@ -41,6 +43,34 @@ object ToneMap {
             val gg = (dr[1] / wSum * 255).toInt().coerceIn(0, 255)
             val bb = (dr[2] / wSum * 255).toInt().coerceIn(0, 255)
             out[i] = (0xFF shl 24) or (rr shl 16) or (gg shl 8) or bb
+        }
+        return out
+    }
+
+    /** Edge sharpening (unsharp mask, 3x3) plus light denoising in the shadows, where noise shows most. */
+    fun refine(px: IntArray, w: Int, h: Int, sharpen: Double = 0.5): IntArray {
+        val out = IntArray(px.size)
+        for (y in 0 until h) for (x in 0 until w) {
+            var sr = 0; var sg = 0; var sb = 0
+            for (dy in -1..1) for (dx in -1..1) {
+                val yy = (y + dy).coerceIn(0, h - 1)
+                val xx = (x + dx).coerceIn(0, w - 1)
+                val c = px[yy * w + xx]
+                sr += (c shr 16) and 0xFF; sg += (c shr 8) and 0xFF; sb += c and 0xFF
+            }
+            val br = sr / 9.0; val bg = sg / 9.0; val bb = sb / 9.0
+            val c = px[y * w + x]
+            val r = (c shr 16) and 0xFF; val g = (c shr 8) and 0xFF; val b = c and 0xFF
+            val lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+            // shadows get up to half their detail replaced by the blur (denoise); lights keep full sharpness
+            val shadow = ((0.25 - lum) / 0.25).coerceIn(0.0, 1.0) * 0.5
+            val fr = r + sharpen * (r - br)
+            val fg = g + sharpen * (g - bg)
+            val fb = b + sharpen * (b - bb)
+            val rr = (fr * (1 - shadow) + br * shadow).toInt().coerceIn(0, 255)
+            val gg = (fg * (1 - shadow) + bg * shadow).toInt().coerceIn(0, 255)
+            val bq = (fb * (1 - shadow) + bb * shadow).toInt().coerceIn(0, 255)
+            out[y * w + x] = (0xFF shl 24) or (rr shl 16) or (gg shl 8) or bq
         }
         return out
     }

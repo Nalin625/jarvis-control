@@ -24,6 +24,8 @@ import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.core.Camera
+import androidx.camera.extensions.ExtensionMode
+import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
@@ -46,6 +48,9 @@ class CameraZoomActivity : ComponentActivity() {
     private var maxZoom = 1f
     private var lastLuma = 128.0
     private var sceneName = "NORMAL"
+    private var nightMode = false
+    private var extManager: ExtensionsManager? = null
+    private lateinit var nightButton: Button
     private var manualExposure = true
     private var currentIso = 200
     private var currentShutterNs = 8_333_333L   // 1/120 s
@@ -109,6 +114,10 @@ class CameraZoomActivity : ComponentActivity() {
                 updateHud()
             }
         }
+        nightButton = Button(this).apply {
+            text = nightLabel()
+            setOnClickListener { toggleNight() }
+        }
         val shutter = Button(this).apply {
             text = "SHOOT"
             setOnClickListener { takeBurst() }
@@ -125,6 +134,8 @@ class CameraZoomActivity : ComponentActivity() {
             Gravity.BOTTOM).apply { setMargins(48, 0, 48, 220) })
         root.addView(learnButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.START).apply { setMargins(24, 0, 0, 60) })
+        root.addView(nightButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.START).apply { setMargins(24, 0, 0, 130) })
         root.addView(shutter, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { setMargins(0, 0, 0, 60) })
         setContentView(root)
@@ -141,6 +152,24 @@ class CameraZoomActivity : ComponentActivity() {
 
     private fun learnLabel(): String = if (learner.enabled) "LEARN: ON" else "LEARN: OFF"
 
+    private fun nightLabel(): String = if (nightMode) "NIGHT: ON" else "NIGHT: OFF"
+
+    /** Turns the phone's own night mode on or off. Night mode replaces the manual ISO and shutter, so those are switched off. */
+    private fun toggleNight() {
+        val next = !nightMode
+        if (next && extManager?.isExtensionAvailable(CameraSelector.DEFAULT_BACK_CAMERA, ExtensionMode.NIGHT) != true) {
+            Toast.makeText(this, "This phone has no night mode through the camera API", Toast.LENGTH_LONG).show()
+            return
+        }
+        nightMode = next
+        if (nightMode) {
+            if (manualExposure) { manualExposure = false; clearManual() }
+            modeButton.text = modeLabel()
+        }
+        nightButton.text = nightLabel()
+        startCamera()
+    }
+
     private fun modeLabel(): String = if (manualExposure) "ISO: RULES" else "ISO: AUTO"
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -156,22 +185,35 @@ class CameraZoomActivity : ComponentActivity() {
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             val provider = future.get()
-            val previewUseCase = Preview.Builder().build().also { it.setSurfaceProvider(preview.surfaceProvider) }
-            imageCapture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build()
-            provider.unbindAll()
-            val cam = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, previewUseCase, imageCapture)
-            camera = cam
-            cam.cameraInfo.zoomState.observe(this) { zs ->
-                maxZoom = zs.maxZoomRatio
-                updateHud(zs.zoomRatio)
-            }
-            // learning mode: start from the exposure you chose last time
-            val st = cam.cameraInfo.exposureState
-            if (st.isExposureCompensationSupported) {
-                val r = st.exposureCompensationRange
-                cam.cameraControl.setExposureCompensationIndex(learner.bias.roundToInt().coerceIn(r.lower, r.upper))
-            }
+            // the extensions manager tells us whether the phone offers night mode; bind after it is ready
+            val extFuture = ExtensionsManager.getInstanceAsync(this, provider)
+            extFuture.addListener({
+                extManager = extFuture.get()
+                bindCamera(provider)
+            }, ContextCompat.getMainExecutor(this))
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun bindCamera(provider: ProcessCameraProvider) {
+        val previewUseCase = Preview.Builder().build().also { it.setSurfaceProvider(preview.surfaceProvider) }
+        imageCapture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build()
+        provider.unbindAll()
+        val base = CameraSelector.DEFAULT_BACK_CAMERA
+        val em = extManager
+        val selector = if (nightMode && em != null && em.isExtensionAvailable(base, ExtensionMode.NIGHT))
+            em.getExtensionEnabledCameraSelector(base, ExtensionMode.NIGHT) else base
+        val cam = provider.bindToLifecycle(this, selector, previewUseCase, imageCapture)
+        camera = cam
+        cam.cameraInfo.zoomState.observe(this) { zs ->
+            maxZoom = zs.maxZoomRatio
+            updateHud(zs.zoomRatio)
+        }
+        // learning mode: start from the exposure you chose last time
+        val st = cam.cameraInfo.exposureState
+        if (st.isExposureCompensationSupported) {
+            val r = st.exposureCompensationRange
+            cam.cameraControl.setExposureCompensationIndex(learner.bias.roundToInt().coerceIn(r.lower, r.upper))
+        }
     }
 
     private fun applyZoom(progress: Int) {
@@ -336,7 +378,7 @@ class CameraZoomActivity : ComponentActivity() {
     /** Applies highlight recovery and shadow lift to a JPEG; returns a new JPEG, or null if it cannot be decoded. */
     private fun toneMapJpeg(jpeg: ByteArray): ByteArray? {
         val (px, w, h) = decodeArgb(jpeg) ?: return null
-        val bmp = android.graphics.Bitmap.createBitmap(ToneMap.fuse(px), w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        val bmp = android.graphics.Bitmap.createBitmap(ToneMap.refine(ToneMap.fuse(px), w, h), w, h, android.graphics.Bitmap.Config.ARGB_8888)
         val bos = java.io.ByteArrayOutputStream()
         bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, bos)
         bmp.recycle()

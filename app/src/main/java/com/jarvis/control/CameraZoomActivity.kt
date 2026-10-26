@@ -17,6 +17,12 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureRequest
+import android.util.Range
+import androidx.camera.camera2.interop.Camera2CameraControl
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
@@ -39,6 +45,9 @@ class CameraZoomActivity : ComponentActivity() {
     private var imageCapture: ImageCapture? = null
     private var maxZoom = 1f
     private var lastLuma = 128.0
+    private var manualExposure = true
+    private var currentIso = 200
+    private var currentShutterNs = 8_333_333L   // 1/120 s
     private val work = Executors.newSingleThreadExecutor()
     private val enhancer: Enhancer = SmallSrEnhancer()
     private lateinit var learner: CameraLearning
@@ -47,6 +56,7 @@ class CameraZoomActivity : ComponentActivity() {
     private lateinit var zoomBar: SeekBar
     private lateinit var evBar: SeekBar
     private lateinit var learnButton: Button
+    private lateinit var modeButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,12 +99,23 @@ class CameraZoomActivity : ComponentActivity() {
                 updateHud()
             }
         }
+        modeButton = Button(this).apply {
+            text = modeLabel()
+            setOnClickListener {
+                manualExposure = !manualExposure
+                text = modeLabel()
+                if (manualExposure) applyIsoShutter(currentIso, currentShutterNs) else clearManual()
+                updateHud()
+            }
+        }
         val shutter = Button(this).apply {
             text = "SHOOT"
             setOnClickListener { takeBurst() }
         }
         val root = FrameLayout(this)
-        root.addView(preview, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(modeButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.END).apply { setMargins(0, 0, 24, 60) })
+        root.addView(preview,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         root.addView(hud, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or Gravity.START).apply { setMargins(24, 48, 24, 24) })
         root.addView(zoomBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -118,6 +139,8 @@ class CameraZoomActivity : ComponentActivity() {
     }
 
     private fun learnLabel(): String = if (learner.enabled) "LEARN: ON" else "LEARN: OFF"
+
+    private fun modeLabel(): String = if (manualExposure) "ISO: RULES" else "ISO: AUTO"
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -167,6 +190,28 @@ class CameraZoomActivity : ComponentActivity() {
         updateHud()
     }
 
+    /** Sets the sensor ISO and shutter time (phone's own limits respected). Auto exposure is switched off while this is on. */
+    private fun applyIsoShutter(iso: Int, shutterNs: Long) {
+        val cam = camera ?: return
+        val info = Camera2CameraInfo.from(cam.cameraInfo)
+        val isoRange: Range<Int>? = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+        val timeRange: Range<Long>? = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+        val isoV = isoRange?.clamp(iso) ?: iso
+        val timeV = timeRange?.clamp(shutterNs) ?: shutterNs
+        val opts = CaptureRequestOptions.Builder()
+            .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            .setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, isoV)
+            .setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, timeV)
+            .build()
+        Camera2CameraControl.from(cam.cameraControl).setCaptureRequestOptions(opts)
+    }
+
+    /** Back to the phone's own auto exposure. */
+    private fun clearManual() {
+        val cam = camera ?: return
+        Camera2CameraControl.from(cam.cameraControl).clearCaptureRequestOptions()
+    }
+
     /** The rules' own change, not learned. */
     private fun adjustByRules(step: Int) {
         val cam = camera ?: return
@@ -184,11 +229,11 @@ class CameraZoomActivity : ComponentActivity() {
     }
 
     private fun updateHud(zoomRatio: Float = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f) {
-        val iso = CameraBrain.isoFor(lastLuma)
-        val shutterDenom = (1_000_000_000L / CameraBrain.shutterNsFor(lastLuma, 1_000_000_000L / 30)).coerceAtLeast(1L)
+        val shutterDenom = (1_000_000_000L / currentShutterNs).coerceAtLeast(1L)
+        val exposureLine = if (manualExposure) "RULES: ISO $currentIso  shutter 1/$shutterDenom" else "AUTO: phone sets ISO and shutter"
         hud.text = String.format(
-            "ZOOM %.1fx  (phone max %.1fx)\nRULES: ISO %d  shutter 1/%d\nLEARN %s  bias %.1f\nTap the picture to focus",
-            zoomRatio, maxZoom, iso, shutterDenom, if (learner.enabled) "on" else "off", learner.bias)
+            "ZOOM %.1fx  (phone max %.1fx)\n%s\nLEARN %s  bias %.1f\nTap the picture to focus",
+            zoomRatio, maxZoom, exposureLine, if (learner.enabled) "on" else "off", learner.bias)
     }
 
     private fun takeBurst() {
@@ -209,7 +254,15 @@ class CameraZoomActivity : ComponentActivity() {
                             val luma = decodeGray(bytes)?.let { CameraBrain.meanLuma(it.first) } ?: 128.0
                             runOnUiThread {
                                 lastLuma = luma
-                                adjustByRules(CameraBrain.evStep(luma))
+                                if (manualExposure) {
+                                    val cam = camera
+                                    val range = cam?.let { Camera2CameraInfo.from(it.cameraInfo).getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) }
+                                    currentIso = CameraBrain.adjustIso(currentIso, luma, range?.lower ?: 100, range?.upper ?: 800)
+                                    applyIsoShutter(currentIso, currentShutterNs)
+                                } else {
+                                    adjustByRules(CameraBrain.evStep(luma))
+                                }
+                                updateHud()
                                 window.decorView.postDelayed({ shoot() }, 350)
                             }
                         }
@@ -281,6 +334,7 @@ class CameraZoomActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        if (manualExposure) clearManual()
         work.shutdown()
         super.onDestroy()
     }

@@ -34,6 +34,17 @@ object CameraBrain {
         else -> 800
     }
 
+    /** Moves ISO toward the target brightness: too dark doubles it, too bright halves it, always inside lo..hi. */
+    fun adjustIso(current: Int, meanLuma: Double, lo: Int, hi: Int): Int {
+        val err = TARGET_LUMA - meanLuma
+        val next = when {
+            err > 25 -> current * 2
+            err < -25 -> current / 2
+            else -> current
+        }
+        return next.coerceIn(lo, hi)
+    }
+
     /** Shutter time in nanoseconds: bright scenes get fast shutters, dark scenes slower, never longer than maxNs. */
     fun shutterNsFor(meanLuma: Double, maxNs: Long): Long {
         val t = ((150.0 - meanLuma) / 150.0).coerceIn(0.0, 1.0)

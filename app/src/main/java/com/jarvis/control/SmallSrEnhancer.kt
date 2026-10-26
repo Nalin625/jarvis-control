@@ -45,9 +45,11 @@ class SmallSrEnhancer : Enhancer {
                 val cy1 = min(h, ty + tile)
                 for (y in ty until cy1) for (x in tx until cx1) {
                     val i = (y - y0) * pw + (x - x0)
-                    val r = (res[i] * 255f).roundToInt().coerceIn(0, 255)
-                    val g = (res[plane + i] * 255f).roundToInt().coerceIn(0, 255)
-                    val b = (res[2 * plane + i] * 255f).roundToInt().coerceIn(0, 255)
+                    // half the AI correction: keeps the photo's own detail, less noise and blockiness
+                    val orig = pixels[y * w + x]
+                    val r = ((Color.red(orig) / 255f + res[i]) * 0.5f * 255f).roundToInt().coerceIn(0, 255)
+                    val g = ((Color.green(orig) / 255f + res[plane + i]) * 0.5f * 255f).roundToInt().coerceIn(0, 255)
+                    val b = ((Color.blue(orig) / 255f + res[2 * plane + i]) * 0.5f * 255f).roundToInt().coerceIn(0, 255)
                     outPixels[y * w + x] = Color.rgb(r, g, b)
                 }
                 tx += tile

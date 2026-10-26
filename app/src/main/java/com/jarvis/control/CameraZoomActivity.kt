@@ -299,10 +299,13 @@ class CameraZoomActivity : ComponentActivity() {
         if (best < 0) return
         runOnUiThread { Toast.makeText(this, "Enhancing with Jarvis AI, this can take a while...", Toast.LENGTH_LONG).show() }
         val originalOk = saveToGallery(frames[best], "jarvis_zoom")
-        val aiOk = saveToGallery(enhancer.enhance(frames[best]), "jarvis_zoom_AI")
+        // stack the burst (align + average) for less noise; the AI copy works on the stacked picture
+        val stacked = stackBurst(frames, best)
+        if (stacked != null) saveToGallery(stacked, "jarvis_zoom_STACK")
+        val aiOk = saveToGallery(enhancer.enhance(stacked ?: frames[best]), "jarvis_zoom_AI")
         runOnUiThread {
             val msg = when {
-                originalOk && aiOk -> "Saved original and AI-enhanced copy to Pictures/Jarvis"
+                originalOk && aiOk -> "Saved original, stacked and AI-enhanced copies to Pictures/Jarvis"
                 originalOk -> "Saved original. The AI copy failed."
                 else -> "Could not save the photo"
             }
@@ -311,6 +314,33 @@ class CameraZoomActivity : ComponentActivity() {
     }
 
     /** Grayscale pixels of a JPEG, at half size (about a quarter of the pixels). */
+    /** Stacks the burst into one JPEG (half size, aligned to the sharpest frame). Null if the frames cannot be decoded. */
+    private fun stackBurst(frames: List<ByteArray>, ref: Int): ByteArray? {
+        if (frames.size < 2) return null
+        val decoded = frames.map { decodeArgb(it) ?: return null }
+        val w = decoded[0].second
+        val h = decoded[0].third
+        if (decoded.any { it.second != w || it.third != h }) return null
+        val out = FrameStack.alignAndAverage(decoded.map { it.first }, w, h, ref)
+        val bmp = android.graphics.Bitmap.createBitmap(out, w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        val bos = java.io.ByteArrayOutputStream()
+        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, bos)
+        bmp.recycle()
+        return bos.toByteArray()
+    }
+
+    /** Decodes a JPEG at half size into ARGB pixels: pixels, width, height. */
+    private fun decodeArgb(jpeg: ByteArray): Triple<IntArray, Int, Int>? {
+        val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
+        val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, opts) ?: return null
+        val w = bmp.width
+        val h = bmp.height
+        val px = IntArray(w * h)
+        bmp.getPixels(px, 0, w, 0, 0, w, h)
+        bmp.recycle()
+        return Triple(px, w, h)
+    }
+
     private fun decodeGray(jpeg: ByteArray): Pair<IntArray, Int>? {
         val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
         val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, opts) ?: return null

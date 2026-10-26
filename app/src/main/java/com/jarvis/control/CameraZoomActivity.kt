@@ -12,6 +12,8 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.ImageView
+import android.view.View
 import android.widget.FrameLayout
 import android.widget.SeekBar
 import android.widget.TextView
@@ -24,6 +26,8 @@ import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.core.Camera
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.UseCase
 import androidx.camera.extensions.ExtensionMode
 import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.core.CameraSelector
@@ -51,6 +55,20 @@ class CameraZoomActivity : ComponentActivity() {
     private var nightMode = false
     private var extManager: ExtensionsManager? = null
     private lateinit var nightButton: Button
+    private var awbMode: Int? = null
+    private var wbIndex = 0
+    private lateinit var wbButton: Button
+    private var peakOn = false
+    private lateinit var peakButton: Button
+    private lateinit var peakView: ImageView
+    private val analysisExec = Executors.newSingleThreadExecutor()
+    private val wbChoices: List<Int?> = listOf(
+        null,
+        CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT,
+        CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT,
+        CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT,
+        CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT
+    )
     private var manualExposure = true
     private var currentIso = 200
     private var currentShutterNs = 8_333_333L   // 1/120 s
@@ -118,6 +136,30 @@ class CameraZoomActivity : ComponentActivity() {
             text = nightLabel()
             setOnClickListener { toggleNight() }
         }
+        wbButton = Button(this).apply {
+            text = wbLabel()
+            setOnClickListener {
+                wbIndex = (wbIndex + 1) % wbChoices.size
+                awbMode = wbChoices[wbIndex]
+                text = wbLabel()
+                pushCaptureOptions()
+            }
+        }
+        peakButton = Button(this).apply {
+            text = peakLabel()
+            setOnClickListener {
+                peakOn = !peakOn
+                text = peakLabel()
+                peakView.visibility = if (peakOn) View.VISIBLE else View.GONE
+                if (!peakOn) peakView.setImageBitmap(null)
+                startCamera()
+            }
+        }
+        peakView = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FILL_CENTER
+            alpha = 0.85f
+            visibility = View.GONE
+        }
         val shutter = Button(this).apply {
             text = "SHOOT"
             setOnClickListener { takeBurst() }
@@ -126,6 +168,7 @@ class CameraZoomActivity : ComponentActivity() {
         root.addView(modeButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.END).apply { setMargins(0, 0, 24, 60) })
         root.addView(preview,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(peakView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         root.addView(hud, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or Gravity.START).apply { setMargins(24, 48, 24, 24) })
         root.addView(zoomBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -136,6 +179,10 @@ class CameraZoomActivity : ComponentActivity() {
             Gravity.BOTTOM or Gravity.START).apply { setMargins(24, 0, 0, 60) })
         root.addView(nightButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.START).apply { setMargins(24, 0, 0, 130) })
+        root.addView(wbButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.START).apply { setMargins(24, 0, 0, 200) })
+        root.addView(peakButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.START).apply { setMargins(24, 0, 0, 270) })
         root.addView(shutter, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { setMargins(0, 0, 0, 60) })
         setContentView(root)
@@ -151,6 +198,21 @@ class CameraZoomActivity : ComponentActivity() {
     }
 
     private fun learnLabel(): String = if (learner.enabled) "LEARN: ON" else "LEARN: OFF"
+
+    private fun wbLabel(): String = when (awbMode) {
+        null -> "WB: AUTO"
+        CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT -> "WB: SUN"
+        CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT -> "WB: BULB"
+        CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT -> "WB: TUBE"
+        else -> "WB: CLOUD"
+    }
+
+    private fun peakLabel(): String = if (peakOn) "PEAK: ON" else "PEAK: OFF"
+
+    private fun showPeaks(mask: IntArray, w: Int, h: Int) {
+        if (!peakOn) return
+        peakView.setImageBitmap(android.graphics.Bitmap.createBitmap(mask, w, h, android.graphics.Bitmap.Config.ARGB_8888))
+    }
 
     private fun nightLabel(): String = if (nightMode) "NIGHT: ON" else "NIGHT: OFF"
 
@@ -196,13 +258,22 @@ class CameraZoomActivity : ComponentActivity() {
 
     private fun bindCamera(provider: ProcessCameraProvider) {
         val previewUseCase = Preview.Builder().build().also { it.setSurfaceProvider(preview.surfaceProvider) }
-        imageCapture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build()
+        val ic = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build()
+        imageCapture = ic
         provider.unbindAll()
         val base = CameraSelector.DEFAULT_BACK_CAMERA
         val em = extManager
         val selector = if (nightMode && em != null && em.isExtensionAvailable(base, ExtensionMode.NIGHT))
             em.getExtensionEnabledCameraSelector(base, ExtensionMode.NIGHT) else base
-        val cam = provider.bindToLifecycle(this, selector, previewUseCase, imageCapture)
+        val useCases = mutableListOf<UseCase>(previewUseCase, ic)
+        if (peakOn) {
+            useCases.add(ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setTargetResolution(Peaking.ANALYSIS_SIZE)
+                .build()
+                .also { it.setAnalyzer(analysisExec, Peaking.EdgeAnalyzer { mask, w, h -> runOnUiThread { showPeaks(mask, w, h) } }) })
+        }
+        val cam = provider.bindToLifecycle(this, selector, *useCases.toTypedArray())
         camera = cam
         cam.cameraInfo.zoomState.observe(this) { zs ->
             maxZoom = zs.maxZoomRatio
@@ -214,6 +285,7 @@ class CameraZoomActivity : ComponentActivity() {
             val r = st.exposureCompensationRange
             cam.cameraControl.setExposureCompensationIndex(learner.bias.roundToInt().coerceIn(r.lower, r.upper))
         }
+        pushCaptureOptions()
     }
 
     private fun applyZoom(progress: Int) {
@@ -233,26 +305,37 @@ class CameraZoomActivity : ComponentActivity() {
         updateHud()
     }
 
-    /** Sets the sensor ISO and shutter time (phone's own limits respected). Auto exposure is switched off while this is on. */
+    /** Sets the sensor ISO and shutter time (the phone's own limits respected). Auto exposure is switched off while rules are on. */
     private fun applyIsoShutter(iso: Int, shutterNs: Long) {
-        val cam = camera ?: return
-        val info = Camera2CameraInfo.from(cam.cameraInfo)
-        val isoRange: Range<Int>? = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-        val timeRange: Range<Long>? = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-        val isoV = isoRange?.clamp(iso) ?: iso
-        val timeV = timeRange?.clamp(shutterNs) ?: shutterNs
-        val opts = CaptureRequestOptions.Builder()
-            .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            .setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, isoV)
-            .setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, timeV)
-            .build()
-        Camera2CameraControl.from(cam.cameraControl).setCaptureRequestOptions(opts)
+        currentIso = iso
+        currentShutterNs = shutterNs
+        pushCaptureOptions()
     }
 
-    /** Back to the phone's own auto exposure. */
-    private fun clearManual() {
+    /** Back to the phone's own auto exposure (callers have already switched the rules off). */
+    private fun clearManual() = pushCaptureOptions()
+
+    /** Pushes every manual setting at once: ISO and shutter (when rules are on) and white balance (when chosen).
+     *  Camera2 options replace each other, so they must be sent together. */
+    private fun pushCaptureOptions() {
         val cam = camera ?: return
-        Camera2CameraControl.from(cam.cameraControl).clearCaptureRequestOptions()
+        val b = CaptureRequestOptions.Builder()
+        var any = false
+        if (manualExposure) {
+            val info = Camera2CameraInfo.from(cam.cameraInfo)
+            val isoRange: Range<Int>? = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            val timeRange: Range<Long>? = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            b.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            b.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, isoRange?.clamp(currentIso) ?: currentIso)
+            b.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, timeRange?.clamp(currentShutterNs) ?: currentShutterNs)
+            any = true
+        }
+        awbMode?.let {
+            b.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, it)
+            any = true
+        }
+        val control = Camera2CameraControl.from(cam.cameraControl)
+        if (any) control.setCaptureRequestOptions(b.build()) else control.clearCaptureRequestOptions()
     }
 
     /** The rules' own change, not learned. */
@@ -432,8 +515,8 @@ class CameraZoomActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (manualExposure) clearManual()
         work.shutdown()
+        analysisExec.shutdown()
         super.onDestroy()
     }
 }

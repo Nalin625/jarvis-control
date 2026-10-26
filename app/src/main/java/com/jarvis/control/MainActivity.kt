@@ -571,6 +571,7 @@ class MainActivity : AppCompatActivity() {
                 Tile("\uD83D\uDDC2", "Laptop deck") { showPage(1) },
                 Tile("\uD83D\uDCCA", "Laptop status") { showPage(1); sendDeck("status report") },
                 Tile("\uD83D\uDCE1", "Find laptop") { findAndConnect() },
+                Tile("\uD83D\uDCF7", "Jarvis camera") { startActivity(Intent(this, CameraZoomActivity::class.java)) },
                 Tile("\uD83D\uDDA5", "Remote") { startActivity(Intent(this, RemoteActivity::class.java)) },
                 Tile("\uD83D\uDCCB", "Paste to laptop") { pasteToLaptop() },
                 Tile("\u26A1", "Server on") { startJarvisService() },

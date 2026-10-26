@@ -114,6 +114,7 @@ object Hud {
             "note" -> { poly(c, true, 4f, 20f, 5f, 16f, 16f, 5f, 19f, 8f, 8f, 19f); line(c, 14f, 7f, 17f, 10f) }
             "power" -> { rf.set(5f, 5f, 19f, 19f); c.drawArc(rf, -60f, 300f, false, p); line(c, 12f, 3f, 12f, 11f) }
             "play" -> poly(c, true, 8f, 5f, 19f, 12f, 8f, 19f)
+            "camera" -> { rr(c, 3f, 7f, 21f, 20f, 2f); c.drawCircle(12f, 13.5f, 3.5f, p); poly(c, false, 8f, 7f, 9.5f, 4f, 14.5f, 4f, 16f, 7f) }
             "search" -> { c.drawCircle(11f, 11f, 6.5f, p); line(c, 16f, 16f, 21f, 21f) }
             "lock" -> {
                 rr(c, 5f, 11f, 19f, 21f, 2f)
@@ -1098,7 +1099,8 @@ class ThemeHomeActivity : AppCompatActivity() {
             Act("MEDIA", "play") { mediaToggle() },
             Act("FIND LAPTOP", "search") { send("find my laptop") },
             Act("SHUT DOWN", "power") { confirm("Shut down the laptop?") { send("shut down laptop") } },
-            Act("LAPTOP", "laptop") { startActivity(Intent(this, RemoteActivity::class.java)) }
+            Act("LAPTOP", "laptop") { startActivity(Intent(this, RemoteActivity::class.java)) },
+            Act("CAMERA", "camera") { startActivity(Intent(this, CameraZoomActivity::class.java)) }
         )
 
         val root = FrameLayout(this)

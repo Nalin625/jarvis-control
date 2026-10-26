@@ -429,12 +429,12 @@ class CameraZoomActivity : ComponentActivity() {
         if (stacked != null) saveToGallery(stacked, "jarvis_zoom_STACK")
         // recover blown highlights and lift shadows, then the AI pass works on that
         val base = stacked ?: frames[best]
-        val toned = toneMapJpeg(base)
+        val toned = toneMapJpeg(base, sceneName)
         if (toned != null) saveToGallery(toned, "jarvis_zoom_HDR")
         val aiOk = saveToGallery(enhancer.enhance(toned ?: base), "jarvis_zoom_AI")
         runOnUiThread {
             val msg = when {
-                originalOk && aiOk -> "Saved original, stacked, HDR and AI copies to Pictures/Jarvis"
+                originalOk && aiOk -> "Saved $sceneName look: original, stacked, HDR and AI copies to Pictures/Jarvis"
                 originalOk -> "Saved original. The AI copy failed."
                 else -> "Could not save the photo"
             }
@@ -459,9 +459,12 @@ class CameraZoomActivity : ComponentActivity() {
     }
 
     /** Applies highlight recovery and shadow lift to a JPEG; returns a new JPEG, or null if it cannot be decoded. */
-    private fun toneMapJpeg(jpeg: ByteArray): ByteArray? {
+    private fun toneMapJpeg(jpeg: ByteArray, scene: String): ByteArray? {
         val (px, w, h) = decodeArgb(jpeg) ?: return null
-        val bmp = android.graphics.Bitmap.createBitmap(ToneMap.refine(ToneMap.fuse(px), w, h), w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        val fused = ToneMap.fuse(px)
+        // night scenes get the night look; everything else gets the day look
+        val look = if (scene == "NIGHT") ToneMap.nightLook(fused) else ToneMap.dayLook(fused)
+        val bmp = android.graphics.Bitmap.createBitmap(ToneMap.refine(look, w, h), w, h, android.graphics.Bitmap.Config.ARGB_8888)
         val bos = java.io.ByteArrayOutputStream()
         bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, bos)
         bmp.recycle()

@@ -74,4 +74,38 @@ object ToneMap {
         }
         return out
     }
+
+    /** Brightness of each pixel, 0..255. */
+    fun gray(px: IntArray): IntArray = IntArray(px.size) {
+        val c = px[it]
+        (((c shr 16) and 0xFF) * 299 + ((c shr 8) and 0xFF) * 587 + (c and 0xFF) * 114) / 1000
+    }
+
+    private fun pack(r: Double, g: Double, b: Double): Int {
+        val rr = (r * 255).toInt().coerceIn(0, 255)
+        val gg = (g * 255).toInt().coerceIn(0, 255)
+        val bb = (b * 255).toInt().coerceIn(0, 255)
+        return (0xFF shl 24) or (rr shl 16) or (gg shl 8) or bb
+    }
+
+    /** Night look: lifts the dark detail of the sky and trees, and rolls off the brightest light (the moon) so it keeps its shape. */
+    fun nightLook(px: IntArray): IntArray = IntArray(px.size) { i ->
+        val c = px[i]
+        fun curve(v8: Int): Double {
+            val lifted = (v8 / 255.0).pow(0.8)
+            return if (lifted > 0.92) 0.92 + (lifted - 0.92) * 0.4 else lifted
+        }
+        pack(curve((c shr 16) and 0xFF), curve((c shr 8) and 0xFF), curve(c and 0xFF))
+    }
+
+    /** Day look: richer colour (sky blue, grass green, flowers) with a little more saturation. Highlights are left alone so bright sky keeps its clouds. */
+    fun dayLook(px: IntArray): IntArray = IntArray(px.size) { i ->
+        val c = px[i]
+        val r = ((c shr 16) and 0xFF) / 255.0
+        val g = ((c shr 8) and 0xFF) / 255.0
+        val b = (c and 0xFF) / 255.0
+        val lum = 0.299 * r + 0.587 * g + 0.114 * b
+        val sat = 1.2
+        pack(lum + (r - lum) * sat, lum + (g - lum) * sat, lum + (b - lum) * sat)
+    }
 }

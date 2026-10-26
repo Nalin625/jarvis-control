@@ -40,7 +40,7 @@ class CameraZoomActivity : ComponentActivity() {
     private var maxZoom = 1f
     private var lastLuma = 128.0
     private val work = Executors.newSingleThreadExecutor()
-    private var enhancer: Enhancer = NoEnhancer
+    private val enhancer: Enhancer = SmallSrEnhancer()
     private lateinit var learner: CameraLearning
     private lateinit var preview: PreviewView
     private lateinit var hud: TextView
@@ -232,10 +232,16 @@ class CameraZoomActivity : ComponentActivity() {
         val scores = frames.map { sharpness(it) }
         val best = SharpnessMath.bestIndex(scores)
         if (best < 0) return
-        val result = enhancer.enhance(frames[best])
-        val ok = saveToGallery(result)
+        runOnUiThread { Toast.makeText(this, "Enhancing with Jarvis AI, this can take a while...", Toast.LENGTH_LONG).show() }
+        val originalOk = saveToGallery(frames[best], "jarvis_zoom")
+        val aiOk = saveToGallery(enhancer.enhance(frames[best]), "jarvis_zoom_AI")
         runOnUiThread {
-            Toast.makeText(this, if (ok) "Saved to Pictures/Jarvis" else "Could not save the photo", Toast.LENGTH_SHORT).show()
+            val msg = when {
+                originalOk && aiOk -> "Saved original and AI-enhanced copy to Pictures/Jarvis"
+                originalOk -> "Saved original. The AI copy failed."
+                else -> "Could not save the photo"
+            }
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -259,9 +265,9 @@ class CameraZoomActivity : ComponentActivity() {
         return SharpnessMath.laplacianVariance(g.first, g.second, g.first.size / g.second)
     }
 
-    private fun saveToGallery(jpeg: ByteArray): Boolean {
+    private fun saveToGallery(jpeg: ByteArray, prefix: String): Boolean {
         val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, "jarvis_zoom_${System.currentTimeMillis()}.jpg")
+            put(MediaStore.Images.Media.DISPLAY_NAME, "${prefix}_${System.currentTimeMillis()}.jpg")
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
             put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Jarvis")
             put(MediaStore.Images.Media.IS_PENDING, 1)

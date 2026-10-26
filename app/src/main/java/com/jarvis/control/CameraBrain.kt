@@ -34,6 +34,14 @@ object CameraBrain {
         else -> 800
     }
 
+    /** Share of pixels that are nearly pure white (blown-out highlights), 0..1. */
+    fun clippedFraction(gray: IntArray): Double {
+        if (gray.isEmpty()) return 0.0
+        var n = 0
+        for (v in gray) if (v >= 250) n++
+        return n.toDouble() / gray.size
+    }
+
     /** Moves ISO toward the target brightness: too dark doubles it, too bright halves it, always inside lo..hi. */
     fun adjustIso(current: Int, meanLuma: Double, lo: Int, hi: Int): Int {
         val err = TARGET_LUMA - meanLuma

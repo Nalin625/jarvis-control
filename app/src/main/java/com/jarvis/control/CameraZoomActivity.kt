@@ -251,13 +251,22 @@ class CameraZoomActivity : ComponentActivity() {
                     if (frames.size == 1) {
                         // the rules read the first shot, then move the exposure for the rest of the burst
                         work.execute {
-                            val luma = decodeGray(bytes)?.let { CameraBrain.meanLuma(it.first) } ?: 128.0
+                            val gray = decodeGray(bytes)?.first
+                            val luma = gray?.let { CameraBrain.meanLuma(it) } ?: 128.0
+                            val clipped = gray?.let { CameraBrain.clippedFraction(it) } ?: 0.0
                             runOnUiThread {
                                 lastLuma = luma
                                 if (manualExposure) {
                                     val cam = camera
                                     val range = cam?.let { Camera2CameraInfo.from(it.cameraInfo).getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) }
-                                    currentIso = CameraBrain.adjustIso(currentIso, luma, range?.lower ?: 100, range?.upper ?: 800)
+                                    val lo = range?.lower ?: 100
+                                    val hi = range?.upper ?: 800
+                                    currentIso = if (clipped > 0.02) {
+                                        // highlights blown out: lower the ISO even if the average looks fine
+                                        (currentIso / 2).coerceIn(lo, hi)
+                                    } else {
+                                        CameraBrain.adjustIso(currentIso, luma, lo, hi)
+                                    }
                                     applyIsoShutter(currentIso, currentShutterNs)
                                 } else {
                                     adjustByRules(CameraBrain.evStep(luma))

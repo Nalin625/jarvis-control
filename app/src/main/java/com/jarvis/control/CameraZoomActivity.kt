@@ -302,10 +302,14 @@ class CameraZoomActivity : ComponentActivity() {
         // stack the burst (align + average) for less noise; the AI copy works on the stacked picture
         val stacked = stackBurst(frames, best)
         if (stacked != null) saveToGallery(stacked, "jarvis_zoom_STACK")
-        val aiOk = saveToGallery(enhancer.enhance(stacked ?: frames[best]), "jarvis_zoom_AI")
+        // recover blown highlights and lift shadows, then the AI pass works on that
+        val base = stacked ?: frames[best]
+        val toned = toneMapJpeg(base)
+        if (toned != null) saveToGallery(toned, "jarvis_zoom_HDR")
+        val aiOk = saveToGallery(enhancer.enhance(toned ?: base), "jarvis_zoom_AI")
         runOnUiThread {
             val msg = when {
-                originalOk && aiOk -> "Saved original, stacked and AI-enhanced copies to Pictures/Jarvis"
+                originalOk && aiOk -> "Saved original, stacked, HDR and AI copies to Pictures/Jarvis"
                 originalOk -> "Saved original. The AI copy failed."
                 else -> "Could not save the photo"
             }
@@ -323,6 +327,16 @@ class CameraZoomActivity : ComponentActivity() {
         if (decoded.any { it.second != w || it.third != h }) return null
         val out = FrameStack.alignAndAverage(decoded.map { it.first }, w, h, ref)
         val bmp = android.graphics.Bitmap.createBitmap(out, w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        val bos = java.io.ByteArrayOutputStream()
+        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, bos)
+        bmp.recycle()
+        return bos.toByteArray()
+    }
+
+    /** Applies highlight recovery and shadow lift to a JPEG; returns a new JPEG, or null if it cannot be decoded. */
+    private fun toneMapJpeg(jpeg: ByteArray): ByteArray? {
+        val (px, w, h) = decodeArgb(jpeg) ?: return null
+        val bmp = android.graphics.Bitmap.createBitmap(ToneMap.fuse(px), w, h, android.graphics.Bitmap.Config.ARGB_8888)
         val bos = java.io.ByteArrayOutputStream()
         bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, bos)
         bmp.recycle()

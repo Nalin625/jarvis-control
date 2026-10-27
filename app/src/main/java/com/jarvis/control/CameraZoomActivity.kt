@@ -508,15 +508,27 @@ class CameraZoomActivity : ComponentActivity() {
         else -> "phone auto"
     }
 
-    /** Five shots 350 ms apart with the settings the run just chose. */
+    /** A decoded picture: ARGB pixels, width, height. */
+    private class Argb(val px: IntArray, val w: Int, val h: Int)
+
+    /** Five shots: three at the planned exposure, then two at a quarter of the shutter time (two stops darker),
+     *  so bright lights are captured without blowing out. With the phone's own exposure, five shots at its setting. */
     private fun startBurst() {
         val ic = imageCapture ?: run {
             running = false
             return
         }
+        val bracket = aiOn && !nightMode
+        val longNs = currentShutterNs
+        val shortNs = longNs / 4
+        val split = if (bracket) 3 else 5
         val frames = ArrayList<ByteArray>()
         val main = ContextCompat.getMainExecutor(this)
         fun shoot() {
+            if (bracket) {
+                currentShutterNs = if (frames.size < split) longNs else shortNs
+                pushCaptureOptions()
+            }
             logLine("Shot ${frames.size + 1} of 5 (${shotInfo()})")
             ic.takePicture(main, object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
@@ -526,14 +538,16 @@ class CameraZoomActivity : ComponentActivity() {
                     image.close()
                     frames.add(bytes)
                     if (frames.size < 5) {
-                        window.decorView.postDelayed({ shoot() }, 350L)
+                        window.decorView.postDelayed({ shoot() }, if (bracket) 450L else 350L)
                     } else {
+                        currentShutterNs = longNs
                         running = false
-                        logLine("Stacking the 5 shots, then the look and the AI pass")
-                        work.execute { pickAndSave(frames.toList()) }
+                        logLine(if (bracket) "Stacking the 3 normal and 2 dark shots, then fusing them" else "Stacking the 5 shots, then the look and the AI pass")
+                        work.execute { pickAndSave(frames.toList(), split) }
                     }
                 }
                 override fun onError(exception: ImageCaptureException) {
+                    currentShutterNs = longNs
                     running = false
                     logLine("Shot failed")
                     Toast.makeText(this@CameraZoomActivity, "Shot failed.", Toast.LENGTH_SHORT).show()
@@ -543,18 +557,27 @@ class CameraZoomActivity : ComponentActivity() {
         shoot()
     }
 
-    /** Background thread: keeps the sharpest frame, stacks the burst, applies the look, saves the copies. */
-    private fun pickAndSave(frames: List<ByteArray>) {
-        val scores = frames.map { sharpness(it) }
-        val best = SharpnessMath.bestIndex(scores)
+    /** Background thread: picks the sharpest normal shot, stacks each exposure group, fuses the two,
+     *  applies the look for the scene, and saves the copies. */
+    private fun pickAndSave(frames: List<ByteArray>, split: Int) {
+        val normal = frames.subList(0, split)
+        val best = SharpnessMath.bestIndex(normal.map { sharpness(it) })
         if (best < 0) return
-        val originalOk = saveToGallery(frames[best], "jarvis_zoom")
-        val stacked = stackBurst(frames, best)
-        if (stacked != null) saveToGallery(stacked, "jarvis_zoom_STACK")
-        val base = stacked ?: frames[best]
-        val toned = toneMapJpeg(base, sceneName)
-        if (toned != null) saveToGallery(toned, "jarvis_zoom_HDR")
-        val aiOk = saveToGallery(enhancer.enhance(toned ?: base), "jarvis_zoom_AI")
+        val originalOk = saveToGallery(normal[best], "jarvis_zoom")
+        val longStack = stackArgb(normal, best)
+            ?: decodeArgb(normal[best])?.let { Argb(it.first, it.second, it.third) }
+        if (longStack == null) {
+            runOnUiThread { logLine("Could not read the photo") }
+            return
+        }
+        val shortStack = if (frames.size > split) stackArgb(frames.subList(split, frames.size), 0) else null
+        val fused = if (shortStack != null && shortStack.w == longStack.w && shortStack.h == longStack.h)
+            Argb(ToneMap.fuseExposures(longStack.px, shortStack.px), longStack.w, longStack.h)
+        else longStack
+        saveToGallery(encodeArgb(longStack), "jarvis_zoom_STACK")
+        val look = toneArgb(fused, sceneName)
+        saveToGallery(look, "jarvis_zoom_HDR")
+        val aiOk = saveToGallery(enhancer.enhance(look), "jarvis_zoom_AI")
         runOnUiThread {
             val msg = when {
                 originalOk && aiOk -> "Saved the $sceneName look: original, stacked, HDR and AI copies in Pictures/Jarvis"
@@ -566,31 +589,29 @@ class CameraZoomActivity : ComponentActivity() {
         }
     }
 
-    /** Stacks the burst into one JPEG (half size, aligned to the sharpest frame). Null if the frames cannot be decoded. */
-    private fun stackBurst(frames: List<ByteArray>, ref: Int): ByteArray? {
+    /** Aligns and averages several frames into one picture. Null if they cannot be read or differ in size. */
+    private fun stackArgb(frames: List<ByteArray>, ref: Int): Argb? {
         if (frames.size < 2) return null
         val decoded = frames.map { decodeArgb(it) ?: return null }
         val w = decoded[0].second
         val h = decoded[0].third
         if (decoded.any { it.second != w || it.third != h }) return null
-        val out = FrameStack.alignAndAverage(decoded.map { it.first }, w, h, ref)
-        val bmp = android.graphics.Bitmap.createBitmap(out, w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        return Argb(FrameStack.alignAndAverage(decoded.map { it.first }, w, h, ref), w, h)
+    }
+
+    private fun encodeArgb(a: Argb): ByteArray {
+        val bmp = android.graphics.Bitmap.createBitmap(a.px, a.w, a.h, android.graphics.Bitmap.Config.ARGB_8888)
         val bos = java.io.ByteArrayOutputStream()
         bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, bos)
         bmp.recycle()
         return bos.toByteArray()
     }
 
-    /** Highlight recovery and shadow lift, with the look for the scene (night or day). */
-    private fun toneMapJpeg(jpeg: ByteArray, scene: String): ByteArray? {
-        val (px, w, h) = decodeArgb(jpeg) ?: return null
-        val fused = ToneMap.fuse(px)
+    /** Highlight recovery, shadow lift and detail, with the look for the scene (night or day). */
+    private fun toneArgb(a: Argb, scene: String): ByteArray {
+        val fused = ToneMap.fuse(a.px)
         val look = if (scene == "NIGHT") ToneMap.nightLook(fused) else ToneMap.dayLook(fused)
-        val bmp = android.graphics.Bitmap.createBitmap(ToneMap.refine(look, w, h), w, h, android.graphics.Bitmap.Config.ARGB_8888)
-        val bos = java.io.ByteArrayOutputStream()
-        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, bos)
-        bmp.recycle()
-        return bos.toByteArray()
+        return encodeArgb(Argb(ToneMap.refine(look, a.w, a.h), a.w, a.h))
     }
 
     /** Decodes a JPEG at half size into ARGB pixels: pixels, width, height. */

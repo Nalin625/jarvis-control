@@ -108,4 +108,16 @@ object ToneMap {
         val sat = 1.2
         pack(lum + (r - lum) * sat, lum + (g - lum) * sat, lum + (b - lum) * sat)
     }
+
+    /** Two real exposures of one scene: the normal one keeps shadows and mid-tones, the dark one keeps the bright lights.
+     *  Each pixel takes the normal exposure unless it is near white there, then the dark exposure. */
+    fun fuseExposures(normal: IntArray, dark: IntArray): IntArray = IntArray(normal.size) { i ->
+        val a = normal[i]
+        val b = dark[i]
+        val lum = (0.299 * ((a shr 16) and 0xFF) + 0.587 * ((a shr 8) and 0xFF) + 0.114 * (a and 0xFF)) / 255.0
+        val wNormal = ((0.95 - lum) / 0.15).coerceIn(0.0, 1.0)
+        val wDark = 1.0 - wNormal
+        fun mix(sh: Int): Int = ((((a shr sh) and 0xFF) * wNormal) + (((b shr sh) and 0xFF) * wDark)).toInt().coerceIn(0, 255)
+        (0xFF shl 24) or (mix(16) shl 16) or (mix(8) shl 8) or mix(0)
+    }
 }

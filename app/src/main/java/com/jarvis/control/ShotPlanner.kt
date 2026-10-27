@@ -15,14 +15,14 @@ data class ShotPlan(
     val steps: List<ShotStep>
 )
 
-/** Chooses the camera settings from the light. The rules come from photography guides:
+/** Chooses the camera settings from the light. The rules come from photography guides (see docs/camera_settings_research.md):
  *  night sky and moon need a daylight white balance, focus at infinity, a steady phone and low noise;
  *  bright skies need a low ISO and fast shutter so they do not blow out. These are fixed rules, not a trained network. */
 object ShotPlanner {
     const val NS_1_500 = 2_000_000L
     const val NS_1_250 = 4_000_000L
     const val NS_1_125 = 8_000_000L
-    const val NS_1_15 = 66_666_667L
+    const val NS_1_30 = 33_333_333L   // handheld floor for a phone's main camera (about 1 over the focal length)
 
     fun plan(
         scene: String,
@@ -49,9 +49,9 @@ object ShotPlanner {
                         "a bright light in the dark (like the moon): a fast shutter and low ISO keep it from blowing out"))
                 } else {
                     iso = 1600
-                    shutter = NS_1_15
-                    steps.add(ShotStep("Exposure", "ISO 1600, 1/15 s",
-                        "dark sky: a high ISO and a longer shutter bring out detail; slower than 1/15 s blurs when hand-held"))
+                    shutter = NS_1_30
+                    steps.add(ShotStep("Exposure", "ISO 1600, 1/30 s",
+                        "dark sky: a high ISO and a 1/30 s shutter bring out detail; slower than 1/30 s blurs when hand-held"))
                 }
                 awb = CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT
                 steps.add(ShotStep("White balance", "daylight",
@@ -77,9 +77,9 @@ object ShotPlanner {
             else -> {
                 if (mean < 90) {
                     iso = 400
-                    shutter = NS_1_125
-                    steps.add(ShotStep("Exposure", "ISO 400, 1/125 s",
-                        "a dim room: a little more ISO and a slower shutter"))
+                    shutter = NS_1_30
+                    steps.add(ShotStep("Exposure", "ISO 400, 1/30 s",
+                        "a dim room: a little more ISO, but never slower than 1/30 s when hand-held"))
                 } else {
                     iso = 200
                     shutter = NS_1_250

@@ -6,36 +6,38 @@ import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureRequest
 import android.os.Bundle
 import android.provider.MediaStore
+import android.util.Range
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.ImageView
-import android.view.View
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import android.hardware.camera2.CameraCharacteristics
-import android.hardware.camera2.CaptureRequest
-import android.util.Range
 import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.core.Camera
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.UseCase
-import androidx.camera.extensions.ExtensionMode
-import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.extensions.ExtensionMode
+import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
@@ -43,154 +45,180 @@ import androidx.core.content.ContextCompat
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
-/** Jarvis camera (phone). The phone's own maximum zoom, tap to focus, the rules pick the exposure,
- *  a burst of 5 shots keeps the sharpest, saved to Pictures/Jarvis. Learning mode remembers your exposure choices.
- *  Enhancer is the slot for an on-phone AI model. */
+/** Jarvis camera (phone). The AI reads the light, chooses ISO, shutter, white balance and focus, and shows each
+ *  decision as it makes it. SHOOT goes step by step; FIX applies everything at once. A burst of 5 is stacked,
+ *  given a look for day or night, and saved to Pictures/Jarvis. */
 class CameraZoomActivity : ComponentActivity() {
+    /** What the live picture looks like right now. */
+    private data class Reading(val scene: String, val mean: Double, val clipped: Double)
+
     private var camera: Camera? = null
     private var imageCapture: ImageCapture? = null
-    private var maxZoom = 1f
-    private var lastLuma = 128.0
-    private var sceneName = "NORMAL"
-    private var nightMode = false
-    private var autoRetry = false
     private var extManager: ExtensionsManager? = null
-    private lateinit var nightButton: Button
-    private var awbMode: Int? = null
-    private var wbIndex = 0
-    private lateinit var wbButton: Button
+    private var maxZoom = 1f
+    private var zoomNow = 1f
+
+    @Volatile private var live: Reading? = null
+    private var shownScene = ""
+    private var sceneName = "NORMAL"
+
+    private var aiOn = true                  // AI picks ISO, shutter, white balance and focus
+    private var nightMode = false            // the phone's own night processing
+    private var currentIso = 200
+    private var currentShutterNs = ShotPlanner.NS_1_125
+    private var awbMode = CaptureRequest.CONTROL_AWB_MODE_AUTO
+    private var wbIndex = 0                  // 0 = AI decides white balance; otherwise a fixed choice
+    private var focusInfinity = false
+    private var gridOn = false
     private var peakOn = false
-    private lateinit var peakButton: Button
-    private lateinit var peakView: ImageView
-    private val analysisExec = Executors.newSingleThreadExecutor()
+    private var running = false
+    private var pendingFix: Boolean? = null  // a run waiting for the camera to rebind (true = apply all at once)
+
     private val wbChoices: List<Int?> = listOf(
         null,
+        CaptureRequest.CONTROL_AWB_MODE_AUTO,
         CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT,
         CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT,
         CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT,
         CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT
     )
-    private var manualExposure = false   // default: the phone's own auto exposure
-    private var currentIso = 200
-    private var currentShutterNs = 8_333_333L   // 1/120 s
-    private val work = Executors.newSingleThreadExecutor()
-    private val enhancer: Enhancer = SmallSrEnhancer()
+
     private lateinit var learner: CameraLearning
     private lateinit var preview: PreviewView
+    private lateinit var peakView: ImageView
+    private lateinit var gridView: GridLines
     private lateinit var hud: TextView
+    private lateinit var logView: TextView
     private lateinit var zoomBar: SeekBar
     private lateinit var evBar: SeekBar
+    private lateinit var aiButton: Button
+    private lateinit var nightButton: Button
+    private lateinit var wbButton: Button
+    private lateinit var gridButton: Button
+    private lateinit var peakButton: Button
     private lateinit var learnButton: Button
-    private lateinit var modeButton: Button
+    private lateinit var fixButton: Button
+    private lateinit var shootButton: Button
+    private val logLines = ArrayList<String>()
+    private val work = Executors.newSingleThreadExecutor()
+    private val analysisExec = Executors.newSingleThreadExecutor()
+    private val enhancer: Enhancer = SmallSrEnhancer()
+
+    private val density: Float by lazy { resources.displayMetrics.density }
+    private fun dp(v: Int): Int = (v * density).roundToInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         learner = CameraLearning(this)
         preview = PreviewView(this)
-        hud = TextView(this).apply {
-            setTextColor(Color.rgb(0, 220, 255))
-            textSize = 14f
-            typeface = Typeface.MONOSPACE
-            setBackgroundColor(Color.argb(120, 0, 0, 0))
-            setPadding(24, 16, 24, 16)
-        }
-        zoomBar = SeekBar(this).apply {
-            max = 100
-            progress = 0
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
-                    if (fromUser) applyZoom(p)
-                }
-                override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) {}
-            })
-        }
-        evBar = SeekBar(this).apply {
-            max = 4
-            progress = 2
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
-                    if (fromUser) setExposure(p - 2, learn = true)
-                }
-                override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) {}
-            })
-        }
-        learnButton = Button(this).apply {
-            text = learnLabel()
-            setOnClickListener {
-                learner.enabled = !learner.enabled
-                text = learnLabel()
-                updateHud()
-            }
-        }
-        modeButton = Button(this).apply {
-            text = modeLabel()
-            setOnClickListener {
-                manualExposure = !manualExposure
-                text = modeLabel()
-                if (manualExposure) applyIsoShutter(currentIso, currentShutterNs) else clearManual()
-                updateHud()
-            }
-        }
-        nightButton = Button(this).apply {
-            text = nightLabel()
-            setOnClickListener { toggleNight() }
-        }
-        wbButton = Button(this).apply {
-            text = wbLabel()
-            setOnClickListener {
-                wbIndex = (wbIndex + 1) % wbChoices.size
-                awbMode = wbChoices[wbIndex]
-                text = wbLabel()
-                pushCaptureOptions()
-            }
-        }
-        peakButton = Button(this).apply {
-            text = peakLabel()
-            setOnClickListener {
-                peakOn = !peakOn
-                text = peakLabel()
-                peakView.visibility = if (peakOn) View.VISIBLE else View.GONE
-                if (!peakOn) peakView.setImageBitmap(null)
-                startCamera()
-            }
-        }
         peakView = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             alpha = 0.85f
             visibility = View.GONE
         }
-        val shutter = Button(this).apply {
-            text = "SHOOT"
-            setOnClickListener { takeBurst() }
+        gridView = GridLines(this).apply { visibility = View.GONE }
+        hud = TextView(this).apply {
+            setTextColor(Color.rgb(230, 240, 250))
+            textSize = 13f
+            typeface = Typeface.MONOSPACE
+            background = roundedBox(Color.argb(170, 8, 12, 18), 14)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
         }
-        val root = FrameLayout(this)
-        root.addView(modeButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM or Gravity.END).apply { setMargins(0, 0, 24, 60) })
-        root.addView(preview,FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        logView = TextView(this).apply {
+            setTextColor(Color.rgb(200, 214, 228))
+            textSize = 12.5f
+            typeface = Typeface.MONOSPACE
+            maxLines = 8
+        }
+        zoomBar = SeekBar(this).apply { max = 100; progress = 0 }
+        zoomBar.onUser { applyZoom(it) }
+        evBar = SeekBar(this).apply { max = 4; progress = 2 }
+        evBar.onUser { setExposure(it - 2, learn = true) }
+
+        aiButton = chip { toggleAi() }
+        nightButton = chip { toggleNight() }
+        wbButton = chip { cycleWb() }
+        gridButton = chip {
+            gridOn = !gridOn
+            gridView.visibility = if (gridOn) View.VISIBLE else View.GONE
+            updateChips()
+        }
+        peakButton = chip {
+            peakOn = !peakOn
+            peakView.visibility = if (peakOn) View.VISIBLE else View.GONE
+            if (!peakOn) peakView.setImageBitmap(null)
+            updateChips()
+        }
+        learnButton = chip {
+            learner.enabled = !learner.enabled
+            updateChips()
+            updateStatus()
+        }
+        fixButton = chip { runSequence(true) }.apply { text = "FIX"; textSize = 14f }
+        shootButton = Button(this).apply {
+            text = "SHOOT"
+            setTextColor(Color.BLACK)
+            textSize = 15f
+            background = GradientDrawable().apply {
+                setShape(GradientDrawable.OVAL)
+                setColor(Color.rgb(0, 220, 255))
+            }
+            setOnClickListener { runSequence(false) }
+        }
+
+        val chipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (b in listOf(aiButton, nightButton, wbButton, gridButton, peakButton, learnButton)) {
+            chipRow.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(dp(4), 0, dp(4), 0)
+            })
+        }
+        val scroll = HorizontalScrollView(this).apply {
+            setHorizontalScrollBarEnabled(false)
+            addView(chipRow)
+        }
+        val actionRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(fixButton, LinearLayout.LayoutParams(dp(84), dp(56)))
+            addView(shootButton, LinearLayout.LayoutParams(dp(96), dp(96)).apply { setMargins(dp(16), 0, dp(16), 0) })
+            addView(TextView(this@CameraZoomActivity).apply {
+                text = "5 shots\nstacked"
+                setTextColor(Color.rgb(160, 175, 190))
+                textSize = 11f
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(dp(84), dp(56)))
+        }
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedBox(Color.argb(205, 10, 14, 20), 22)
+            setPadding(dp(16), dp(12), dp(16), dp(14))
+            addView(logView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(zoomBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(evBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+            addView(actionRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = dp(8)
+            })
+        }
+
+        val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        root.addView(preview, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         root.addView(peakView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        root.addView(gridView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         root.addView(hud, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.TOP or Gravity.START).apply { setMargins(24, 48, 24, 24) })
-        root.addView(zoomBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM).apply { setMargins(48, 0, 48, 300) })
-        root.addView(evBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM).apply { setMargins(48, 0, 48, 220) })
-        root.addView(learnButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM or Gravity.START).apply { setMargins(24, 0, 0, 60) })
-        root.addView(nightButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM or Gravity.START).apply { setMargins(24, 0, 0, 130) })
-        root.addView(wbButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM or Gravity.START).apply { setMargins(24, 0, 0, 200) })
-        root.addView(peakButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM or Gravity.START).apply { setMargins(24, 0, 0, 270) })
-        root.addView(shutter, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { setMargins(0, 0, 0, 60) })
+            Gravity.TOP or Gravity.START).apply { setMargins(dp(12), dp(40), dp(12), 0) })
+        root.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM).apply { setMargins(dp(10), 0, dp(10), dp(10)) })
         setContentView(root)
+
         preview.setOnTouchListener { _, e ->
             if (e.action == MotionEvent.ACTION_UP) focusAt(e.x, e.y)
             true
         }
+        updateChips()
+        updateStatus()
+        logLine("Ready. SHOOT goes step by step; FIX applies everything at once.")
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             startCamera()
         } else {
@@ -198,26 +226,85 @@ class CameraZoomActivity : ComponentActivity() {
         }
     }
 
-    private fun learnLabel(): String = if (learner.enabled) "LEARN: ON" else "LEARN: OFF"
+    // ---- small view helpers ----
 
-    private fun wbLabel(): String = when (awbMode) {
-        null -> "WB: AUTO"
+    private fun roundedBox(color: Int, radiusDp: Int): GradientDrawable = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dp(radiusDp).toFloat()
+    }
+
+    private fun chip(onClick: () -> Unit): Button = Button(this).apply {
+        setAllCaps(false)
+        textSize = 12f
+        setTextColor(Color.WHITE)
+        background = roundedBox(Color.argb(90, 255, 255, 255), 14)
+        setPadding(dp(12), dp(6), dp(12), dp(6))
+        setOnClickListener { onClick() }
+    }
+
+    private fun SeekBar.onUser(f: (Int) -> Unit) {
+        setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                if (fromUser) f(p)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar?) {}
+            override fun onStopTrackingTouch(sb: SeekBar?) {}
+        })
+    }
+
+    /** One line in the log panel: the last four decisions, each with its reason. */
+    private fun logLine(text: String) {
+        logLines.add(text)
+        while (logLines.size > 40) logLines.removeAt(0)
+        logView.text = logLines.takeLast(4).joinToString("\n")
+    }
+
+    private fun updateStatus() {
+        val exposure = when {
+            nightMode -> "night mode (phone)"
+            aiOn -> "AI: ISO $currentIso, 1/${1_000_000_000L / currentShutterNs} s"
+            else -> "phone auto exposure"
+        }
+        hud.text = String.format(
+            "LIGHT %s   SCENE %s\n%s\nZOOM %.1fx of %.1fx max",
+            live?.scene ?: "--", sceneName, exposure, zoomNow, maxZoom)
+    }
+
+    private fun updateChips() {
+        aiButton.text = if (aiOn) "AI: ON" else "AI: OFF (phone)"
+        nightButton.text = if (nightMode) "NIGHT: ON" else "NIGHT: OFF"
+        wbButton.text = wbLabel()
+        gridButton.text = if (gridOn) "GRID: ON" else "GRID: OFF"
+        peakButton.text = if (peakOn) "PEAK: ON" else "PEAK: OFF"
+        learnButton.text = if (learner.enabled) "LEARN: ON" else "LEARN: OFF"
+    }
+
+    private fun wbLabel(): String = if (wbIndex == 0) "WB: AI" else when (awbMode) {
+        CaptureRequest.CONTROL_AWB_MODE_AUTO -> "WB: AUTO"
         CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT -> "WB: SUN"
         CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT -> "WB: BULB"
         CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT -> "WB: TUBE"
         else -> "WB: CLOUD"
     }
 
-    private fun peakLabel(): String = if (peakOn) "PEAK: ON" else "PEAK: OFF"
+    // ---- switches ----
 
-    private fun showPeaks(mask: IntArray, w: Int, h: Int) {
-        if (!peakOn) return
-        peakView.setImageBitmap(android.graphics.Bitmap.createBitmap(mask, w, h, android.graphics.Bitmap.Config.ARGB_8888))
+    private fun toggleAi() {
+        aiOn = !aiOn
+        logLine("AI control: " + if (aiOn) "on, it chooses ISO, shutter, white balance and focus" else "off, the phone decides exposure")
+        pushCaptureOptions()
+        updateChips()
+        updateStatus()
     }
 
-    private fun nightLabel(): String = if (nightMode) "NIGHT: ON" else "NIGHT: OFF"
+    private fun cycleWb() {
+        wbIndex = (wbIndex + 1) % wbChoices.size
+        awbMode = wbChoices[wbIndex] ?: CaptureRequest.CONTROL_AWB_MODE_AUTO
+        logLine(if (wbIndex == 0) "White balance: AI decides" else "White balance: you chose ${wbLabel().removePrefix("WB: ").lowercase()}")
+        pushCaptureOptions()
+        updateChips()
+    }
 
-    /** Turns the phone's own night mode on or off. Night mode replaces the manual ISO and shutter, so those are switched off. */
     private fun toggleNight() {
         val next = !nightMode
         if (next && extManager?.isExtensionAvailable(CameraSelector.DEFAULT_BACK_CAMERA, ExtensionMode.NIGHT) != true) {
@@ -225,15 +312,12 @@ class CameraZoomActivity : ComponentActivity() {
             return
         }
         nightMode = next
-        if (nightMode) {
-            if (manualExposure) { manualExposure = false; clearManual() }
-            modeButton.text = modeLabel()
-        }
-        nightButton.text = nightLabel()
+        logLine("Night mode (phone): " + if (nightMode) "on" else "off")
+        updateChips()
         startCamera()
     }
 
-    private fun modeLabel(): String = if (manualExposure) "ISO: RULES" else "ISO: AUTO"
+    // ---- camera binding ----
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -248,7 +332,6 @@ class CameraZoomActivity : ComponentActivity() {
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             val provider = future.get()
-            // the extensions manager tells us whether the phone offers night mode; bind after it is ready
             val extFuture = ExtensionsManager.getInstanceAsync(this, provider)
             extFuture.addListener({
                 extManager = extFuture.get()
@@ -266,19 +349,24 @@ class CameraZoomActivity : ComponentActivity() {
         val em = extManager
         val selector = if (nightMode && em != null && em.isExtensionAvailable(base, ExtensionMode.NIGHT))
             em.getExtensionEnabledCameraSelector(base, ExtensionMode.NIGHT) else base
-        val useCases = mutableListOf<UseCase>(previewUseCase, ic)
-        if (peakOn) {
-            useCases.add(ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setTargetResolution(Peaking.ANALYSIS_SIZE)
-                .build()
-                .also { it.setAnalyzer(analysisExec, Peaking.EdgeAnalyzer { mask, w, h -> runOnUiThread { showPeaks(mask, w, h) } }) })
+        val analysis = ImageAnalysis.Builder()
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setTargetResolution(Peaking.ANALYSIS_SIZE)
+            .build()
+            .also { it.setAnalyzer(analysisExec, Peaking.LiveAnalyzer { gray, w, h -> onLiveFrame(gray, w, h) }) }
+        val cam = try {
+            provider.bindToLifecycle(this, selector, previewUseCase, ic, analysis)
+        } catch (e: IllegalArgumentException) {
+            // some phone night modes cannot run the live analysis: shoot without the live reading
+            logLine("Live light reading is not available in this mode")
+            provider.unbindAll()
+            provider.bindToLifecycle(this, selector, previewUseCase, ic)
         }
-        val cam = provider.bindToLifecycle(this, selector, *useCases.toTypedArray())
         camera = cam
         cam.cameraInfo.zoomState.observe(this) { zs ->
             maxZoom = zs.maxZoomRatio
-            updateHud(zs.zoomRatio)
+            zoomNow = zs.zoomRatio
+            updateStatus()
         }
         // learning mode: start from the exposure you chose last time
         val st = cam.cameraInfo.exposureState
@@ -287,10 +375,48 @@ class CameraZoomActivity : ComponentActivity() {
             cam.cameraControl.setExposureCompensationIndex(learner.bias.roundToInt().coerceIn(r.lower, r.upper))
         }
         pushCaptureOptions()
-        if (autoRetry) {
-            autoRetry = false
-            window.decorView.postDelayed({ takeBurst() }, 1200)
+        updateStatus()
+        val f = pendingFix
+        if (f != null) {
+            pendingFix = null
+            window.decorView.postDelayed({ runSequence(f) }, 1200L)
         }
+    }
+
+    /** Runs on the analysis thread for each live frame: reads the light, and draws peaking if it is on. */
+    private fun onLiveFrame(gray: IntArray, w: Int, h: Int) {
+        val scene = CameraBrain.classify(gray)
+        live = Reading(scene, CameraBrain.meanLuma(gray), CameraBrain.clippedFraction(gray))
+        val edges = if (peakOn) Peaking.edges(gray, w, h) else null
+        runOnUiThread {
+            if (edges != null) peakView.setImageBitmap(android.graphics.Bitmap.createBitmap(edges, w, h, android.graphics.Bitmap.Config.ARGB_8888))
+            if (scene != shownScene) {
+                shownScene = scene
+                updateStatus()
+            }
+        }
+    }
+
+    /** Sends the AI's choices to the camera in one go (Camera2 options replace each other). */
+    private fun pushCaptureOptions() {
+        val cam = camera ?: return
+        val b = CaptureRequestOptions.Builder()
+        if (aiOn && !nightMode) {
+            val info = Camera2CameraInfo.from(cam.cameraInfo)
+            val isoRange: Range<Int>? = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+            val timeRange: Range<Long>? = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+            b.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+            b.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, isoRange?.clamp(currentIso) ?: currentIso)
+            b.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, timeRange?.clamp(currentShutterNs) ?: currentShutterNs)
+        }
+        b.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, awbMode)
+        if (aiOn && focusInfinity) {
+            b.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+            b.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, 0f)
+        } else {
+            b.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+        }
+        Camera2CameraControl.from(cam.cameraControl).setCaptureRequestOptions(b.build())
     }
 
     private fun applyZoom(progress: Int) {
@@ -307,51 +433,7 @@ class CameraZoomActivity : ComponentActivity() {
         val idx = ev.coerceIn(r.lower, r.upper)
         cam.cameraControl.setExposureCompensationIndex(idx)
         if (learn) learner.learnFromUser(idx)
-        updateHud()
-    }
-
-    /** Sets the sensor ISO and shutter time (the phone's own limits respected). Auto exposure is switched off while rules are on. */
-    private fun applyIsoShutter(iso: Int, shutterNs: Long) {
-        currentIso = iso
-        currentShutterNs = shutterNs
-        pushCaptureOptions()
-    }
-
-    /** Back to the phone's own auto exposure (callers have already switched the rules off). */
-    private fun clearManual() = pushCaptureOptions()
-
-    /** Pushes every manual setting at once: ISO and shutter (when rules are on) and white balance (when chosen).
-     *  Camera2 options replace each other, so they must be sent together. */
-    private fun pushCaptureOptions() {
-        val cam = camera ?: return
-        val b = CaptureRequestOptions.Builder()
-        var any = false
-        if (manualExposure) {
-            val info = Camera2CameraInfo.from(cam.cameraInfo)
-            val isoRange: Range<Int>? = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-            val timeRange: Range<Long>? = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-            b.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-            b.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, isoRange?.clamp(currentIso) ?: currentIso)
-            b.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, timeRange?.clamp(currentShutterNs) ?: currentShutterNs)
-            any = true
-        }
-        awbMode?.let {
-            b.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, it)
-            any = true
-        }
-        val control = Camera2CameraControl.from(cam.cameraControl)
-        if (any) control.setCaptureRequestOptions(b.build()) else control.clearCaptureRequestOptions()
-    }
-
-    /** The rules' own change, not learned. */
-    private fun adjustByRules(step: Int) {
-        val cam = camera ?: return
-        val st = cam.cameraInfo.exposureState
-        if (!st.isExposureCompensationSupported || step == 0) return
-        val r = st.exposureCompensationRange
-        val idx = (st.exposureCompensationIndex + step).coerceIn(r.lower, r.upper)
-        cam.cameraControl.setExposureCompensationIndex(idx)
-        updateHud()
+        updateStatus()
     }
 
     private fun focusAt(x: Float, y: Float) {
@@ -359,19 +441,83 @@ class CameraZoomActivity : ComponentActivity() {
         camera?.cameraControl?.startFocusAndMetering(FocusMeteringAction.Builder(point).build())
     }
 
-    private fun updateHud(zoomRatio: Float = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f) {
-        val shutterDenom = (1_000_000_000L / currentShutterNs).coerceAtLeast(1L)
-        val exposureLine = if (manualExposure) "RULES: ISO $currentIso  shutter 1/$shutterDenom" else "AUTO: phone sets ISO and shutter"
-        hud.text = String.format(
-            "ZOOM %.1fx  (phone max %.1fx)\nSCENE %s\n%s\nLEARN %s  bias %.1f\nTap the picture to focus",
-            zoomRatio, maxZoom, sceneName, exposureLine, if (learner.enabled) "on" else "off", learner.bias)
+    // ---- the run: decide, show each step, shoot, save ----
+
+    /** fixAll = apply every decision at once. Otherwise one decision at a time, with a short pause, so you can watch. */
+    private fun runSequence(fixAll: Boolean) {
+        if (running) return
+        if (imageCapture == null || camera == null) {
+            logLine("The camera is still starting")
+            return
+        }
+        val r = live ?: Reading("NORMAL", 128.0, 0.0)
+        val extAvailable = extManager?.isExtensionAvailable(CameraSelector.DEFAULT_BACK_CAMERA, ExtensionMode.NIGHT) == true
+        if (r.scene == "NIGHT" && !nightMode && extAvailable) {
+            nightMode = true
+            logLine("Dark scene: switching on the phone's night mode, then shooting")
+            updateChips()
+            pendingFix = fixAll
+            startCamera()
+            return
+        }
+        val info = Camera2CameraInfo.from(camera!!.cameraInfo)
+        val isoRange: Range<Int>? = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+        val timeRange: Range<Long>? = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+        val plan = ShotPlanner.plan(
+            r.scene, r.mean, r.clipped,
+            isoRange?.lower ?: 100, isoRange?.upper ?: 3200,
+            timeRange?.lower ?: 100_000L, timeRange?.upper ?: 500_000_000L
+        )
+        sceneName = plan.scene
+        running = true
+        val steps = plan.steps
+
+        fun applyStep(i: Int) {
+            if (i >= steps.size) {
+                startBurst()
+                return
+            }
+            val st = steps[i]
+            logLine("${st.title}: ${st.value}\n    ${st.reason}")
+            when (st.title) {
+                "Exposure" -> if (aiOn && !nightMode) {
+                    currentIso = plan.iso
+                    currentShutterNs = plan.shutterNs
+                    pushCaptureOptions()
+                } else if (!aiOn) {
+                    logLine("    AI is off: the phone keeps its own exposure")
+                }
+                "White balance" -> if (aiOn && wbIndex == 0) {
+                    awbMode = plan.awbMode
+                    pushCaptureOptions()
+                }
+                "Focus" -> if (aiOn) {
+                    focusInfinity = plan.focusInfinity
+                    pushCaptureOptions()
+                }
+            }
+            updateStatus()
+            if (fixAll) applyStep(i + 1) else window.decorView.postDelayed({ applyStep(i + 1) }, 700L)
+        }
+        applyStep(0)
     }
 
-    private fun takeBurst() {
-        val ic = imageCapture ?: return
+    private fun shotInfo(): String = when {
+        nightMode -> "night mode"
+        aiOn -> "ISO $currentIso, 1/${1_000_000_000L / currentShutterNs} s"
+        else -> "phone auto"
+    }
+
+    /** Five shots 350 ms apart with the settings the run just chose. */
+    private fun startBurst() {
+        val ic = imageCapture ?: run {
+            running = false
+            return
+        }
         val frames = ArrayList<ByteArray>()
         val main = ContextCompat.getMainExecutor(this)
         fun shoot() {
+            logLine("Shot ${frames.size + 1} of 5 (${shotInfo()})")
             ic.takePicture(main, object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     val buf = image.planes[0].buffer
@@ -379,82 +525,47 @@ class CameraZoomActivity : ComponentActivity() {
                     buf.get(bytes)
                     image.close()
                     frames.add(bytes)
-                    if (frames.size == 1) {
-                        // the rules read the first shot, then move the exposure for the rest of the burst
-                        work.execute {
-                            val gray = decodeGray(bytes)?.first
-                            val luma = gray?.let { CameraBrain.meanLuma(it) } ?: 128.0
-                            val clipped = gray?.let { CameraBrain.clippedFraction(it) } ?: 0.0
-                            val scene = gray?.let { CameraBrain.classify(it) } ?: "NORMAL"
-                            runOnUiThread {
-                                lastLuma = luma
-                                sceneName = scene
-                                if (manualExposure) {
-                                    val cam = camera
-                                    val range = cam?.let { Camera2CameraInfo.from(it.cameraInfo).getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE) }
-                                    val lo = range?.lower ?: 100
-                                    val hi = range?.upper ?: 800
-                                    currentIso = if (clipped > 0.02) {
-                                        // highlights blown out: lower the ISO even if the average looks fine
-                                        (currentIso / 2).coerceIn(lo, hi)
-                                    } else {
-                                        CameraBrain.adjustIso(currentIso, luma, lo, hi, CameraBrain.targetFor(scene))
-                                    }
-                                    applyIsoShutter(currentIso, currentShutterNs)
-                                } else if (scene == "NIGHT" && !nightMode &&
-                                    extManager?.isExtensionAvailable(CameraSelector.DEFAULT_BACK_CAMERA, ExtensionMode.NIGHT) == true) {
-                                    // dark scene on auto: switch on the phone's night mode and shoot the burst again
-                                    nightMode = true
-                                    nightButton.text = nightLabel()
-                                    autoRetry = true
-                                    Toast.makeText(this@CameraZoomActivity, "Dark scene: night mode on, shooting again", Toast.LENGTH_SHORT).show()
-                                    startCamera()
-                                    return@runOnUiThread
-                                }
-                                updateHud()
-                                window.decorView.postDelayed({ shoot() }, 350)
-                            }
-                        }
-                    } else if (frames.size < 5) {
-                        shoot()
+                    if (frames.size < 5) {
+                        window.decorView.postDelayed({ shoot() }, 350L)
                     } else {
+                        running = false
+                        logLine("Stacking the 5 shots, then the look and the AI pass")
                         work.execute { pickAndSave(frames.toList()) }
                     }
                 }
                 override fun onError(exception: ImageCaptureException) {
-                    runOnUiThread { Toast.makeText(this@CameraZoomActivity, "Shot failed.", Toast.LENGTH_SHORT).show() }
+                    running = false
+                    logLine("Shot failed")
+                    Toast.makeText(this@CameraZoomActivity, "Shot failed.", Toast.LENGTH_SHORT).show()
                 }
             })
         }
         shoot()
     }
 
-    /** Background thread: keeps the sharpest frame, saves it to the gallery. */
+    /** Background thread: keeps the sharpest frame, stacks the burst, applies the look, saves the copies. */
     private fun pickAndSave(frames: List<ByteArray>) {
         val scores = frames.map { sharpness(it) }
         val best = SharpnessMath.bestIndex(scores)
         if (best < 0) return
-        runOnUiThread { Toast.makeText(this, "Enhancing with Jarvis AI, this can take a while...", Toast.LENGTH_LONG).show() }
         val originalOk = saveToGallery(frames[best], "jarvis_zoom")
-        // stack the burst (align + average) for less noise; the AI copy works on the stacked picture
         val stacked = stackBurst(frames, best)
         if (stacked != null) saveToGallery(stacked, "jarvis_zoom_STACK")
-        // recover blown highlights and lift shadows, then the AI pass works on that
         val base = stacked ?: frames[best]
         val toned = toneMapJpeg(base, sceneName)
         if (toned != null) saveToGallery(toned, "jarvis_zoom_HDR")
         val aiOk = saveToGallery(enhancer.enhance(toned ?: base), "jarvis_zoom_AI")
         runOnUiThread {
             val msg = when {
-                originalOk && aiOk -> "Saved $sceneName look: original, stacked, HDR and AI copies to Pictures/Jarvis"
+                originalOk && aiOk -> "Saved the $sceneName look: original, stacked, HDR and AI copies in Pictures/Jarvis"
                 originalOk -> "Saved original. The AI copy failed."
                 else -> "Could not save the photo"
             }
+            logLine(msg)
             Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
         }
     }
 
-    /** Grayscale pixels of a JPEG, at half size (about a quarter of the pixels). */
     /** Stacks the burst into one JPEG (half size, aligned to the sharpest frame). Null if the frames cannot be decoded. */
     private fun stackBurst(frames: List<ByteArray>, ref: Int): ByteArray? {
         if (frames.size < 2) return null
@@ -470,11 +581,10 @@ class CameraZoomActivity : ComponentActivity() {
         return bos.toByteArray()
     }
 
-    /** Applies highlight recovery and shadow lift to a JPEG; returns a new JPEG, or null if it cannot be decoded. */
+    /** Highlight recovery and shadow lift, with the look for the scene (night or day). */
     private fun toneMapJpeg(jpeg: ByteArray, scene: String): ByteArray? {
         val (px, w, h) = decodeArgb(jpeg) ?: return null
         val fused = ToneMap.fuse(px)
-        // night scenes get the night look; everything else gets the day look
         val look = if (scene == "NIGHT") ToneMap.nightLook(fused) else ToneMap.dayLook(fused)
         val bmp = android.graphics.Bitmap.createBitmap(ToneMap.refine(look, w, h), w, h, android.graphics.Bitmap.Config.ARGB_8888)
         val bos = java.io.ByteArrayOutputStream()
@@ -495,6 +605,7 @@ class CameraZoomActivity : ComponentActivity() {
         return Triple(px, w, h)
     }
 
+    /** Grayscale pixels of a JPEG, at half size. */
     private fun decodeGray(jpeg: ByteArray): Pair<IntArray, Int>? {
         val opts = BitmapFactory.Options().apply { inSampleSize = 2 }
         val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, opts) ?: return null

@@ -100,6 +100,12 @@ class CameraZoomActivity : ComponentActivity() {
     private lateinit var learnButton: Button
     private lateinit var fixButton: Button
     private lateinit var shootButton: Button
+    private lateinit var tuning: PhotoTuning
+    private lateinit var feedbackRow: HorizontalScrollView
+    private var feedbackScene = "NORMAL"
+    private var smMean = -1.0
+    private var smClip = 0.0
+    private var smShadow = 0.0
     private val logLines = ArrayList<String>()
     private val work = Executors.newSingleThreadExecutor()
     private val analysisExec = Executors.newSingleThreadExecutor()
@@ -189,6 +195,28 @@ class CameraZoomActivity : ComponentActivity() {
                 gravity = Gravity.CENTER
             }, LinearLayout.LayoutParams(dp(84), dp(56)))
         }
+        tuning = PhotoTuning(this)
+        val feedbackInner = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        for ((label, fb) in listOf(
+            "Good" to PhotoTuning.Feedback.GOOD,
+            "Too dark" to PhotoTuning.Feedback.DARK,
+            "Too bright" to PhotoTuning.Feedback.BRIGHT,
+            "Noisy" to PhotoTuning.Feedback.NOISY,
+            "Blurry" to PhotoTuning.Feedback.BLURRY
+        )) {
+            feedbackInner.addView(chip { giveFeedback(fb) }.apply { text = label; textSize = 11f },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    setMargins(dp(3), 0, dp(3), 0)
+                })
+        }
+        feedbackRow = HorizontalScrollView(this).apply {
+            setHorizontalScrollBarEnabled(false)
+            visibility = View.GONE
+            addView(feedbackInner)
+        }
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = roundedBox(Color.argb(205, 10, 14, 20), 22)
@@ -197,6 +225,7 @@ class CameraZoomActivity : ComponentActivity() {
             addView(zoomBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(evBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+            addView(feedbackRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
             addView(actionRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
                 topMargin = dp(8)
@@ -311,6 +340,13 @@ class CameraZoomActivity : ComponentActivity() {
         updateChips()
     }
 
+    /** Your rating of the last photo: teaches the planner for that kind of light. */
+    private fun giveFeedback(fb: PhotoTuning.Feedback) {
+        tuning.learn(feedbackScene, fb)
+        feedbackRow.visibility = View.GONE
+        logLine("Learned: ${fb.name.lowercase()} for ${feedbackScene.lowercase()} light. The next ${feedbackScene.lowercase()} shot uses it.")
+    }
+
     /** Our own night mode: AUTO (dark scenes only), ON (every shot), OFF. Takes 8 frames instead of 5 for night. */
     private fun cycleNight() {
         nightBoost = (nightBoost + 1) % 3
@@ -386,8 +422,15 @@ class CameraZoomActivity : ComponentActivity() {
 
     /** Runs on the analysis thread for each live frame: reads the light, and draws peaking if it is on. */
     private fun onLiveFrame(gray: IntArray, w: Int, h: Int) {
-        val scene = CameraBrain.classify(gray)
-        live = Reading(scene, CameraBrain.meanLuma(gray), CameraBrain.clippedFraction(gray))
+        val m = CameraBrain.meanLuma(gray)
+        val c = CameraBrain.clippedFraction(gray)
+        val sh = CameraBrain.shadowFraction(gray)
+        // smooth over recent frames, so the reading does not flip when the phone moves
+        smMean = if (smMean < 0) m else smMean * 0.85 + m * 0.15
+        smClip = smClip * 0.85 + c * 0.15
+        smShadow = smShadow * 0.85 + sh * 0.15
+        val scene = CameraBrain.classifyStats(smMean, smClip, smShadow)
+        live = Reading(scene, smMean, smClip)
         val edges = if (peakOn) Peaking.edges(gray, w, h) else null
         runOnUiThread {
             if (edges != null) peakView.setImageBitmap(android.graphics.Bitmap.createBitmap(edges, w, h, android.graphics.Bitmap.Config.ARGB_8888))
@@ -447,6 +490,7 @@ class CameraZoomActivity : ComponentActivity() {
     /** fixAll = apply every decision at once. Otherwise one decision at a time, with a short pause, so you can watch. */
     private fun runSequence(fixAll: Boolean) {
         if (running) return
+        feedbackRow.visibility = View.GONE
         if (imageCapture == null || camera == null) {
             logLine("The camera is still starting")
             return
@@ -467,7 +511,8 @@ class CameraZoomActivity : ComponentActivity() {
         val plan = ShotPlanner.plan(
             r.scene, r.mean, r.clipped,
             isoRange?.lower ?: 100, isoRange?.upper ?: 3200,
-            timeRange?.lower ?: 100_000L, timeRange?.upper ?: 500_000_000L
+            timeRange?.lower ?: 100_000L, timeRange?.upper ?: 500_000_000L,
+            tuning.isoStops(r.scene), tuning.shutterStops(r.scene)
         )
         sceneName = plan.scene
         running = true
@@ -588,6 +633,10 @@ class CameraZoomActivity : ComponentActivity() {
                 else -> "Could not save the photo"
             }
             logLine(msg)
+            if (originalOk) {
+                feedbackScene = sceneName
+                feedbackRow.visibility = View.VISIBLE
+            }
             Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
         }
     }

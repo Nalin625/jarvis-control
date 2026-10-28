@@ -53,16 +53,14 @@ object CameraBrain {
     }
 
     /** What kind of scene this is, from brightness only (no object recognition): NIGHT, BACKLIT, BRIGHT or NORMAL. */
-    fun classify(gray: IntArray): String {
-        val mean = meanLuma(gray)
-        val clipped = clippedFraction(gray)
-        val shadow = shadowFraction(gray)
-        return when {
-            mean < 60 -> "NIGHT"
-            clipped > 0.02 && shadow > 0.25 -> "BACKLIT"
-            mean > 170 -> "BRIGHT"
-            else -> "NORMAL"
-        }
+    fun classify(gray: IntArray): String = classifyStats(meanLuma(gray), clippedFraction(gray), shadowFraction(gray))
+
+    /** The same decision from the three numbers (used on the smoothed live reading). */
+    fun classifyStats(mean: Double, clipped: Double, shadow: Double): String = when {
+        mean < 60 -> "NIGHT"
+        clipped > 0.02 && shadow > 0.25 -> "BACKLIT"
+        mean > 170 -> "BRIGHT"
+        else -> "NORMAL"
     }
 
     /** The brightness each scene should land near. Night stays darker so it keeps its mood; backlit and bright are pulled down. */

@@ -681,7 +681,7 @@ class CameraZoomActivity : ComponentActivity() {
         val darkerFrames = if (frames.size > split + 2) frames.subList(split + 2, frames.size) else emptyList()
         val darkStack = if (darkFrames.size >= 2) stackArgb(darkFrames, 0) else null
         val darkerStack = if (darkerFrames.size >= 2) stackArgb(darkerFrames, 0) else null
-        var fused = longStack
+        var fused: Argb = longStack
         for (extra in listOfNotNull(darkStack, darkerStack)) {
             if (extra.w == fused.w && extra.h == fused.h) {
                 fused = Argb(ToneMap.fuseExposures(fused.px, extra.px), fused.w, fused.h)

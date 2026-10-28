@@ -70,6 +70,8 @@ class CameraZoomActivity : ComponentActivity() {
     private var awbMode = CaptureRequest.CONTROL_AWB_MODE_AUTO
     private var wbIndex = 0                  // 0 = AI decides white balance; otherwise a fixed choice
     private var focusInfinity = false
+    private var focusLocked = false          // true after a tap: focus stays on that spot
+    private lateinit var focusButton: Button
     private var gridOn = false
     private var peakOn = false
     private var running = false
@@ -156,6 +158,7 @@ class CameraZoomActivity : ComponentActivity() {
             if (!peakOn) peakView.setImageBitmap(null)
             updateChips()
         }
+        focusButton = chip { toggleFocusLock() }
         learnButton = chip {
             learner.enabled = !learner.enabled
             updateChips()
@@ -174,7 +177,7 @@ class CameraZoomActivity : ComponentActivity() {
         }
 
         val chipRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        for (b in listOf(aiButton, nightButton, wbButton, gridButton, peakButton, learnButton)) {
+        for (b in listOf(aiButton, nightButton, wbButton, gridButton, peakButton, focusButton, learnButton)) {
             chipRow.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 setMargins(dp(4), 0, dp(4), 0)
             })
@@ -312,6 +315,7 @@ class CameraZoomActivity : ComponentActivity() {
         gridButton.text = if (gridOn) "GRID: ON" else "GRID: OFF"
         peakButton.text = if (peakOn) "PEAK: ON" else "PEAK: OFF"
         learnButton.text = if (learner.enabled) "LEARN: ON" else "LEARN: OFF"
+        focusButton.text = if (focusLocked) "FOCUS: TAP" else "FOCUS: AUTO"
     }
 
     private fun wbLabel(): String = if (wbIndex == 0) "WB: AI" else when (awbMode) {
@@ -454,7 +458,9 @@ class CameraZoomActivity : ComponentActivity() {
             b.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, timeRange?.clamp(currentShutterNs) ?: currentShutterNs)
         }
         b.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE, awbMode)
-        if (aiOn && focusInfinity) {
+        if (focusLocked) {
+            b.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+        } else if (aiOn && focusInfinity) {
             b.setCaptureRequestOption(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
             b.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, 0f)
         } else {
@@ -480,9 +486,29 @@ class CameraZoomActivity : ComponentActivity() {
         updateStatus()
     }
 
+    /** A tap focuses and exposes on that spot, and keeps it there (no auto-cancel) until you press FOCUS. */
     private fun focusAt(x: Float, y: Float) {
+        val cam = camera ?: return
         val point = preview.meteringPointFactory.createPoint(x, y)
-        camera?.cameraControl?.startFocusAndMetering(FocusMeteringAction.Builder(point).build())
+        cam.cameraControl.startFocusAndMetering(FocusMeteringAction.Builder(point).disableAutoCancel().build())
+        focusLocked = true
+        focusInfinity = false
+        pushCaptureOptions()
+        logLine("Focus locked where you tapped. Press FOCUS to let the phone find it again")
+        updateChips()
+    }
+
+    /** FOCUS button: releases a tap lock so the phone finds the focus automatically again. */
+    private fun toggleFocusLock() {
+        if (focusLocked) {
+            camera?.cameraControl?.cancelFocusAndMetering()
+            focusLocked = false
+            pushCaptureOptions()
+            logLine("Focus: the phone finds it automatically again")
+        } else {
+            logLine("Tap the picture to lock the focus on that spot")
+        }
+        updateChips()
     }
 
     // ---- the run: decide, show each step, shoot, save ----
@@ -537,7 +563,9 @@ class CameraZoomActivity : ComponentActivity() {
                     awbMode = plan.awbMode
                     pushCaptureOptions()
                 }
-                "Focus" -> if (aiOn) {
+                "Focus" -> if (focusLocked) {
+                    logLine("    your tap point stays in focus")
+                } else if (aiOn) {
                     focusInfinity = plan.focusInfinity
                     pushCaptureOptions()
                 }

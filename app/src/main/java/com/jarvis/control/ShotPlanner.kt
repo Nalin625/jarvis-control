@@ -84,7 +84,7 @@ object ShotPlanner {
         val night = scene == "NIGHT"
         if (night) {
             steps.add(ShotStep("White balance", "daylight", "a night sky and the moon look natural with a daylight setting"))
-            steps.add(ShotStep("Focus", "infinity", "distant lights and the moon are sharpest with focus set far away, not searching"))
+            steps.add(ShotStep("Focus", "automatic", "the phone finds the sharpest point; tap a light or the moon to lock focus there"))
             steps.add(ShotStep("Steady", "hold still", "rest the phone on something or use a tripod; the frames are stacked to cut noise"))
         } else {
             steps.add(ShotStep("White balance", "auto", "daylight scenes are left to the phone's auto colour"))
@@ -97,7 +97,7 @@ object ShotPlanner {
             iso = finalIso,
             shutterNs = finalShutter,
             awbMode = if (night) CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT else CaptureRequest.CONTROL_AWB_MODE_AUTO,
-            focusInfinity = night,
+            focusInfinity = false,
             steps = steps
         )
     }

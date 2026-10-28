@@ -63,7 +63,8 @@ class CameraZoomActivity : ComponentActivity() {
     private var sceneName = "NORMAL"
 
     private var aiOn = true                  // AI picks ISO, shutter, white balance and focus
-    private var nightMode = false            // the phone's own night processing
+    private var nightMode = false            // the phone's own night processing (only where the camera offers it)
+    private var nightBoost = 0               // our own night mode: 0 = AUTO, 1 = ON, 2 = OFF
     private var currentIso = 200
     private var currentShutterNs = ShotPlanner.NS_1_125
     private var awbMode = CaptureRequest.CONTROL_AWB_MODE_AUTO
@@ -136,7 +137,7 @@ class CameraZoomActivity : ComponentActivity() {
         evBar.onUser { setExposure(it - 2, learn = true) }
 
         aiButton = chip { toggleAi() }
-        nightButton = chip { toggleNight() }
+        nightButton = chip { cycleNight() }
         wbButton = chip { cycleWb() }
         gridButton = chip {
             gridOn = !gridOn
@@ -272,7 +273,12 @@ class CameraZoomActivity : ComponentActivity() {
 
     private fun updateChips() {
         aiButton.text = if (aiOn) "AI: ON" else "AI: OFF (phone)"
-        nightButton.text = if (nightMode) "NIGHT: ON" else "NIGHT: OFF"
+        nightButton.text = when {
+            nightMode -> "NIGHT: PHONE"
+            nightBoost == 1 -> "NIGHT: ON"
+            nightBoost == 2 -> "NIGHT: OFF"
+            else -> "NIGHT: AUTO"
+        }
         wbButton.text = wbLabel()
         gridButton.text = if (gridOn) "GRID: ON" else "GRID: OFF"
         peakButton.text = if (peakOn) "PEAK: ON" else "PEAK: OFF"
@@ -305,16 +311,11 @@ class CameraZoomActivity : ComponentActivity() {
         updateChips()
     }
 
-    private fun toggleNight() {
-        val next = !nightMode
-        if (next && extManager?.isExtensionAvailable(CameraSelector.DEFAULT_BACK_CAMERA, ExtensionMode.NIGHT) != true) {
-            Toast.makeText(this, "This phone has no night mode through the camera API", Toast.LENGTH_LONG).show()
-            return
-        }
-        nightMode = next
-        logLine("Night mode (phone): " + if (nightMode) "on" else "off")
+    /** Our own night mode: AUTO (dark scenes only), ON (every shot), OFF. Takes 8 frames instead of 5 for night. */
+    private fun cycleNight() {
+        nightBoost = (nightBoost + 1) % 3
+        logLine("Night mode: " + listOf("AUTO (dark scenes)", "ON (8 frames)", "OFF")[nightBoost])
         updateChips()
-        startCamera()
     }
 
     // ---- camera binding ----
@@ -521,7 +522,9 @@ class CameraZoomActivity : ComponentActivity() {
         val bracket = aiOn && !nightMode
         val longNs = currentShutterNs
         val shortNs = longNs / 4
-        val split = if (bracket) 3 else 5
+        val night = nightBoost == 1 || (nightBoost == 0 && sceneName == "NIGHT")
+        val total = if (night) 8 else 5
+        val split = if (bracket) total - 2 else total
         val frames = ArrayList<ByteArray>()
         val main = ContextCompat.getMainExecutor(this)
         fun shoot() {
@@ -529,7 +532,7 @@ class CameraZoomActivity : ComponentActivity() {
                 currentShutterNs = if (frames.size < split) longNs else shortNs
                 pushCaptureOptions()
             }
-            logLine("Shot ${frames.size + 1} of 5 (${shotInfo()})")
+            logLine("Shot ${frames.size + 1} of $total (${shotInfo()})")
             ic.takePicture(main, object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     val buf = image.planes[0].buffer
@@ -537,12 +540,12 @@ class CameraZoomActivity : ComponentActivity() {
                     buf.get(bytes)
                     image.close()
                     frames.add(bytes)
-                    if (frames.size < 5) {
+                    if (frames.size < total) {
                         window.decorView.postDelayed({ shoot() }, if (bracket) 450L else 350L)
                     } else {
                         currentShutterNs = longNs
                         running = false
-                        logLine(if (bracket) "Stacking the 3 normal and 2 dark shots, then fusing them" else "Stacking the 5 shots, then the look and the AI pass")
+                        logLine(if (bracket) "Stacking ${split} normal and ${total - split} dark shots, then fusing them" else "Stacking the $total shots, then the look and the AI pass")
                         work.execute { pickAndSave(frames.toList(), split) }
                     }
                 }

@@ -21,6 +21,7 @@ import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -104,6 +105,7 @@ class CameraZoomActivity : ComponentActivity() {
     private lateinit var shootButton: Button
     private lateinit var tuning: PhotoTuning
     private lateinit var feedbackRow: HorizontalScrollView
+    private lateinit var progressBar: ProgressBar
     private var feedbackScene = "NORMAL"
     private var smMean = -1.0
     private var smClip = 0.0
@@ -198,6 +200,10 @@ class CameraZoomActivity : ComponentActivity() {
                 gravity = Gravity.CENTER
             }, LinearLayout.LayoutParams(dp(84), dp(56)))
         }
+        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            visibility = View.GONE
+        }
         tuning = PhotoTuning(this)
         val feedbackInner = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -224,6 +230,7 @@ class CameraZoomActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             background = roundedBox(Color.argb(205, 10, 14, 20), 22)
             setPadding(dp(16), dp(12), dp(16), dp(14))
+            addView(progressBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(6)).apply { bottomMargin = dp(6) })
             addView(logView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(zoomBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(evBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -585,8 +592,14 @@ class CameraZoomActivity : ComponentActivity() {
     /** A decoded picture: ARGB pixels, width, height. */
     private class Argb(val px: IntArray, val w: Int, val h: Int)
 
-    /** Five shots: three at the planned exposure, then two at a quarter of the shutter time (two stops darker),
-     *  so bright lights are captured without blowing out. With the phone's own exposure, five shots at its setting. */
+    private fun hideProgress() {
+        progressBar.isIndeterminate = false
+        progressBar.visibility = View.GONE
+    }
+
+    /** Bright-light bracket: normal shots at the planned exposure, two at a quarter of the shutter time (two stops darker),
+     *  and two at a sixteenth (four stops darker), so very bright lights keep their detail.
+     *  Night: 10 shots (6 + 2 + 2). Day: 7 shots (3 + 2 + 2). Without AI control: five shots at the phone's exposure. */
     private fun startBurst() {
         val ic = imageCapture ?: run {
             running = false
@@ -594,15 +607,23 @@ class CameraZoomActivity : ComponentActivity() {
         }
         val bracket = aiOn && !nightMode
         val longNs = currentShutterNs
-        val shortNs = longNs / 4
         val night = nightBoost == 1 || (nightBoost == 0 && sceneName == "NIGHT")
-        val total = if (night) 8 else 5
-        val split = if (bracket) total - 2 else total
+        val total = if (bracket) (if (night) 10 else 7) else 5
+        val split = if (bracket) total - 4 else total
         val frames = ArrayList<ByteArray>()
         val main = ContextCompat.getMainExecutor(this)
+        progressBar.isIndeterminate = false
+        progressBar.max = total
+        progressBar.progress = 0
+        progressBar.visibility = View.VISIBLE
+        fun shutterFor(i: Int): Long = when {
+            !bracket || i < split -> longNs
+            i < split + 2 -> longNs / 4
+            else -> longNs / 16
+        }
         fun shoot() {
             if (bracket) {
-                currentShutterNs = if (frames.size < split) longNs else shortNs
+                currentShutterNs = shutterFor(frames.size)
                 pushCaptureOptions()
             }
             logLine("Shot ${frames.size + 1} of $total (${shotInfo()})")
@@ -613,18 +634,21 @@ class CameraZoomActivity : ComponentActivity() {
                     buf.get(bytes)
                     image.close()
                     frames.add(bytes)
+                    progressBar.progress = frames.size
                     if (frames.size < total) {
                         window.decorView.postDelayed({ shoot() }, if (bracket) 450L else 350L)
                     } else {
                         currentShutterNs = longNs
                         running = false
-                        logLine(if (bracket) "Stacking ${split} normal and ${total - split} dark shots, then fusing them" else "Stacking the $total shots, then the look and the AI pass")
+                        progressBar.isIndeterminate = true
+                        logLine("Saving every shot, stacking each group, fusing the exposures, applying the look")
                         work.execute { pickAndSave(frames.toList(), split) }
                     }
                 }
                 override fun onError(exception: ImageCaptureException) {
                     currentShutterNs = longNs
                     running = false
+                    hideProgress()
                     logLine("Shot failed")
                     Toast.makeText(this@CameraZoomActivity, "Shot failed.", Toast.LENGTH_SHORT).show()
                 }
@@ -633,31 +657,46 @@ class CameraZoomActivity : ComponentActivity() {
         shoot()
     }
 
-    /** Background thread: picks the sharpest normal shot, stacks each exposure group, fuses the two,
-     *  applies the look for the scene, and saves the copies. */
+    /** Background thread: saves every shot, stacks each exposure group, fuses the exposures, applies the look,
+     *  and saves the copies. Groups: normal = frames[0 until split], dark = next two, darker = the rest. */
     private fun pickAndSave(frames: List<ByteArray>, split: Int) {
+        frames.forEachIndexed { i, f -> saveToGallery(f, "jarvis_shot_${i + 1}") }
         val normal = frames.subList(0, split)
         val best = SharpnessMath.bestIndex(normal.map { sharpness(it) })
-        if (best < 0) return
+        if (best < 0) {
+            runOnUiThread { hideProgress() }
+            return
+        }
         val originalOk = saveToGallery(normal[best], "jarvis_zoom")
         val longStack = stackArgb(normal, best)
             ?: decodeArgb(normal[best])?.let { Argb(it.first, it.second, it.third) }
         if (longStack == null) {
-            runOnUiThread { logLine("Could not read the photo") }
+            runOnUiThread {
+                hideProgress()
+                logLine("Could not read the photo")
+            }
             return
         }
-        val shortStack = if (frames.size > split) stackArgb(frames.subList(split, frames.size), 0) else null
-        val fused = if (shortStack != null && shortStack.w == longStack.w && shortStack.h == longStack.h)
-            Argb(ToneMap.fuseExposures(longStack.px, shortStack.px), longStack.w, longStack.h)
-        else longStack
+        val darkFrames = if (frames.size > split) frames.subList(split, minOf(split + 2, frames.size)) else emptyList()
+        val darkerFrames = if (frames.size > split + 2) frames.subList(split + 2, frames.size) else emptyList()
+        val darkStack = if (darkFrames.size >= 2) stackArgb(darkFrames, 0) else null
+        val darkerStack = if (darkerFrames.size >= 2) stackArgb(darkerFrames, 0) else null
+        var fused = longStack
+        for (extra in listOfNotNull(darkStack, darkerStack)) {
+            if (extra.w == fused.w && extra.h == fused.h) {
+                fused = Argb(ToneMap.fuseExposures(fused.px, extra.px), fused.w, fused.h)
+            }
+        }
         saveToGallery(encodeArgb(longStack), "jarvis_zoom_STACK")
+        if (fused !== longStack) saveToGallery(encodeArgb(fused), "jarvis_zoom_FUSED")
         val look = toneArgb(fused, sceneName)
         saveToGallery(look, "jarvis_zoom_HDR")
         val aiOk = saveToGallery(enhancer.enhance(look), "jarvis_zoom_AI")
         runOnUiThread {
+            hideProgress()
             val msg = when {
-                originalOk && aiOk -> "Saved the $sceneName look: original, stacked, HDR and AI copies in Pictures/Jarvis"
-                originalOk -> "Saved original. The AI copy failed."
+                originalOk && aiOk -> "Saved every shot plus the $sceneName look (stacked, fused, HDR, AI) in Pictures/Jarvis"
+                originalOk -> "Saved the shots. The AI copy failed."
                 else -> "Could not save the photo"
             }
             logLine(msg)

@@ -6,13 +6,15 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /** Burst stacking (the idea behind HDR+): line every frame up with the sharpest one, then average them.
- *  Alignment allows a whole-pixel shift plus a small rotation about the centre, which covers handheld drift.
- *  Averaging several aligned frames cuts noise. Pure maths on ARGB pixel arrays, so it can be tested alone. */
+ *  Alignment allows a whole-pixel shift, a small rotation and a small zoom about the centre, which covers
+ *  handheld drift. Averaging several aligned frames cuts noise. Pure maths on ARGB arrays, so it can be tested alone. */
 object FrameStack {
     /** Rotations to try, in degrees. */
     private val ANGLES = doubleArrayOf(-1.0, 0.0, 1.0)
+    /** Zoom in or out to try, after the shift and rotation are chosen (hand-held push and pull). */
+    private val SCALES = doubleArrayOf(0.99, 1.0, 1.01)
 
-    data class Transform(val dx: Int, val dy: Int, val deg: Double)
+    data class Transform(val dx: Int, val dy: Int, val deg: Double, val scale: Double = 1.0)
 
     private fun gray(c: Int): Int = (((c shr 16) and 0xFF) * 299 + ((c shr 8) and 0xFF) * 587 + (c and 0xFF) * 114) / 1000
 
@@ -23,17 +25,38 @@ object FrameStack {
         val cx = (w - 1) / 2.0
         val cy = (h - 1) / 2.0
         val rad = Math.toRadians(t.deg)
-        return ((x - cx) * cos(rad) - (y - cy) * sin(rad) + cx + t.dx).roundToInt()
+        return ((x - cx) * t.scale * cos(rad) - (y - cy) * t.scale * sin(rad) + cx + t.dx).roundToInt()
     }
 
     private fun sourceY(x: Int, y: Int, w: Int, h: Int, t: Transform): Int {
         val cx = (w - 1) / 2.0
         val cy = (h - 1) / 2.0
         val rad = Math.toRadians(t.deg)
-        return ((x - cx) * sin(rad) + (y - cy) * cos(rad) + cy + t.dy).roundToInt()
+        return ((x - cx) * t.scale * sin(rad) + (y - cy) * t.scale * cos(rad) + cy + t.dy).roundToInt()
     }
 
-    /** Best transform of [frameG] onto [refG]: a whole-pixel shift within +-[search] and a rotation from [ANGLES].
+    /** How well transform t lines the frame up with the reference: lower is better; MAX if nothing overlaps. */
+    private fun scoreOf(refG: IntArray, frameG: IntArray, w: Int, h: Int, t: Transform, step: Int): Long {
+        var err = 0L
+        var n = 0L
+        var y = 0
+        while (y < h) {
+            var x = 0
+            while (x < w) {
+                val ix = sourceX(x, y, w, h, t)
+                val iy = sourceY(x, y, w, h, t)
+                if (ix in 0 until w && iy in 0 until h) {
+                    err += abs(refG[y * w + x] - frameG[iy * w + ix])
+                    n++
+                }
+                x += step
+            }
+            y += step
+        }
+        return if (n == 0L) Long.MAX_VALUE else err * 1000L / n
+    }
+
+    /** Best transform of [frameG] onto [refG]: a whole-pixel shift and rotation, then a small zoom.
      *  Compares every [step]-th pixel to keep it fast on a phone. Ties keep the smaller move. */
     fun findTransform(refG: IntArray, frameG: IntArray, w: Int, h: Int, search: Int, step: Int = 4): Transform {
         var best = Transform(0, 0, 0.0)
@@ -41,28 +64,20 @@ object FrameStack {
         var bestMove = Int.MAX_VALUE
         for (deg in ANGLES) for (dy in -search..search) for (dx in -search..search) {
             val t = Transform(dx, dy, deg)
-            var err = 0L
-            var n = 0L
-            var y = 0
-            while (y < h) {
-                var x = 0
-                while (x < w) {
-                    val ix = sourceX(x, y, w, h, t)
-                    val iy = sourceY(x, y, w, h, t)
-                    if (ix in 0 until w && iy in 0 until h) {
-                        err += abs(refG[y * w + x] - frameG[iy * w + ix])
-                        n++
-                    }
-                    x += step
-                }
-                y += step
-            }
-            if (n == 0L) continue
-            val score = err * 1000L / n
+            val score = scoreOf(refG, frameG, w, h, t, step)
+            if (score == Long.MAX_VALUE) continue
             val move = abs(dx) + abs(dy) + (abs(deg) * 10).roundToInt()
             if (score < bestScore || (score == bestScore && move < bestMove)) {
                 bestScore = score
                 bestMove = move
+                best = t
+            }
+        }
+        for (sc in SCALES) {
+            val t = best.copy(scale = sc)
+            val score = scoreOf(refG, frameG, w, h, t, step)
+            if (score < bestScore) {
+                bestScore = score
                 best = t
             }
         }

@@ -1462,7 +1462,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun connectToLaptop(laptop: FoundLaptop) {
-        val phoneToken = binding.tokenField.text.toString().trim()
+        val phoneToken = pairingToken()
         prefs.edit().putString("token", phoneToken).apply()
         setStatus(binding.connectStatusLabel, "Asking ${laptop.name} to connect...", R.color.text_dim)
         Thread {
@@ -1607,7 +1607,7 @@ class MainActivity : AppCompatActivity() {
         val ip = m.groupValues[1]
         val port = m.groupValues[2].ifEmpty { "8899" }
         val pin = m.groupValues[3]
-        val phoneToken = binding.tokenField.text.toString().trim()
+        val phoneToken = pairingToken()
         prefs.edit().putString("token", phoneToken).apply()
         setStatus(binding.pairStatusLabel, "Pairing...", R.color.text_dim)
 
@@ -1732,6 +1732,16 @@ class MainActivity : AppCompatActivity() {
         if (needed.isNotEmpty()) {
             permissionLauncher.launch(needed.toTypedArray())
         }
+    }
+
+    /**
+     * The token the laptop must send back. If the server is running, use the token it is actually checking,
+     * so the laptop never gets a token the phone rejects (the cause of 401 "token mismatch").
+     * If the server is off, use the box value, which the server will start with.
+     */
+    private fun pairingToken(): String {
+        val running = JarvisService.running && JarvisService.activeToken.isNotEmpty()
+        return if (running) JarvisService.activeToken else binding.tokenField.text.toString().trim()
     }
 
     private fun startJarvisService() {

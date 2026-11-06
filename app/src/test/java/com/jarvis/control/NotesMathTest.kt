@@ -10,8 +10,9 @@ class NotesMathTest {
         assertEquals(1.0, NotesMath.wordAccuracy("photosynthesis needs light", "photosynthesis needs light"), 1e-9)
     }
 
-    @Test fun oneWrongWordOutOfFourIsSeventyFivePercent() {
-        assertEquals(0.75, NotesMath.wordAccuracy("photosynthesis needs lite", "photosynthesis needs light"), 1e-9)
+    @Test fun oneWrongWordOutOfThreeIsTwoThirds() {
+        // 3 words in the corrected text, 2 of them read right first time
+        assertEquals(2.0 / 3.0, NotesMath.wordAccuracy("photosynthesis needs lite", "photosynthesis needs light"), 1e-9)
     }
 
     @Test fun repeatedWordsCountOnce() {

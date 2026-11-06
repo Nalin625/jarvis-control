@@ -1100,7 +1100,8 @@ class ThemeHomeActivity : AppCompatActivity() {
             Act("FIND LAPTOP", "search") { send("find my laptop") },
             Act("SHUT DOWN", "power") { confirm("Shut down the laptop?") { send("shut down laptop") } },
             Act("LAPTOP", "laptop") { startActivity(Intent(this, RemoteActivity::class.java)) },
-            Act("CAMERA", "camera") { startActivity(Intent(this, CameraZoomActivity::class.java)) }
+            Act("CAMERA", "camera") { startActivity(Intent(this, CameraZoomActivity::class.java)) },
+            Act("NOTES", "notes scan") { startActivity(Intent(this, NotesScanActivity::class.java)) }
         )
 
         val root = FrameLayout(this)

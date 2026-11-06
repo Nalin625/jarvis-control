@@ -9,6 +9,8 @@ import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.RectF
+import android.content.Context
 import androidx.exifinterface.media.ExifInterface
 import android.os.Bundle
 import android.view.View
@@ -50,6 +52,7 @@ class NotesScanActivity : AppCompatActivity() {
     private val ioExecutor = Executors.newSingleThreadExecutor()
 
     private lateinit var previewView: PreviewView
+    private lateinit var overlay: PageOverlayView
     private lateinit var status: TextView
     private lateinit var editor: EditText
     private lateinit var saveButton: Button
@@ -62,6 +65,7 @@ class NotesScanActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         previewView = PreviewView(this)
+        overlay = PageOverlayView(this).apply { visibility = View.GONE }
         status = TextView(this).apply {
             text = "Point the camera at the notebook page, then tap SCAN."
             textSize = 16f
@@ -92,6 +96,7 @@ class NotesScanActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(32, 32, 32, 32)
             addView(previewView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(overlay, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
             addView(status)
             addView(scanButton)
             addView(editor)
@@ -135,6 +140,8 @@ class NotesScanActivity : AppCompatActivity() {
         }
         val file = File(notesDir, "page_${System.currentTimeMillis()}.jpg")
         status.text = "Reading the page..."
+        overlay.visibility = View.GONE
+        previewView.visibility = View.VISIBLE
         capture.takePicture(
             ImageCapture.OutputFileOptions.Builder(file).build(),
             ioExecutor,
@@ -191,6 +198,13 @@ class NotesScanActivity : AppCompatActivity() {
         recognizer.process(image)
             .addOnSuccessListener { result ->
                 machineText = result.text
+                // Highlight every word the phone picked, on the photo it read.
+                val words = result.textBlocks
+                    .flatMap { block -> block.lines.flatMap { line -> line.elements } }
+                    .mapNotNull { it.boundingBox?.let { box -> RectF(box) } }
+                previewView.visibility = View.GONE
+                overlay.visibility = View.VISIBLE
+                overlay.show(bitmap, words)
                 editor.setText(machineText)
                 editor.visibility = View.VISIBLE
                 saveButton.visibility = View.VISIBLE
@@ -242,5 +256,41 @@ class NotesScanActivity : AppCompatActivity() {
         val values = rows.mapNotNull { runCatching { JSONObject(it).getDouble("accuracy") }.getOrNull() }
         val average = if (values.isEmpty()) 0.0 else values.average()
         stats.text = "Pages corrected: ${rows.size}\nWords the phone got right first time: %.0f%%".format(average * 100)
+    }
+}
+
+/** Shows the photo the phone read, with a yellow box over every word it picked. */
+class PageOverlayView(context: Context) : View(context) {
+
+    private var page: Bitmap? = null
+    private val boxes = mutableListOf<RectF>()
+    private val fillPaint = Paint().apply { color = 0x55FFEB3B; style = Paint.Style.FILL }
+    private val strokePaint = Paint().apply { color = 0xFFFFEB3B.toInt(); style = Paint.Style.STROKE; strokeWidth = 6f }
+    private val pagePaint = Paint(Paint.FILTER_BITMAP_FLAG)
+
+    fun show(bitmap: Bitmap, words: List<RectF>) {
+        page = bitmap
+        boxes.clear()
+        boxes.addAll(words)
+        invalidate()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val bmp = page ?: return
+        if (width == 0 || height == 0) return
+        // Fit the whole page inside the box, keeping its shape.
+        val scale = minOf(width / bmp.width.toFloat(), height / bmp.height.toFloat())
+        val dx = (width - bmp.width * scale) / 2f
+        val dy = (height - bmp.height * scale) / 2f
+        canvas.save()
+        canvas.translate(dx, dy)
+        canvas.scale(scale, scale)
+        canvas.drawBitmap(bmp, 0f, 0f, pagePaint)
+        for (box in boxes) {
+            canvas.drawRect(box, fillPaint)
+            canvas.drawRect(box, strokePaint)
+        }
+        canvas.restore()
     }
 }

@@ -81,6 +81,12 @@ class NotesScanActivity : AppCompatActivity() {
             setOnClickListener { save() }
         }
         stats = TextView(this).apply { textSize = 15f }
+        // The app theme is dark, so give every text box a light colour (otherwise it is black on black).
+        val lightText = 0xFFEAEAEA.toInt()
+        status.setTextColor(lightText)
+        stats.setTextColor(lightText)
+        editor.setTextColor(lightText)
+        editor.setHintTextColor(0xFF9A9A9A.toInt())
 
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL

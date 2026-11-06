@@ -2,7 +2,14 @@ package com.jarvis.control
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.net.Uri
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Matrix
+import android.graphics.Paint
+import androidx.exifinterface.media.ExifInterface
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
@@ -138,9 +145,43 @@ class NotesScanActivity : AppCompatActivity() {
         )
     }
 
+    /**
+     * Make the photo easier to read before ML Kit sees it: fix the camera rotation, drop colour,
+     * and raise the contrast so pencil or light ink stands out from the paper.
+     */
+    private fun preparePage(file: File): Bitmap? {
+        val raw = BitmapFactory.decodeFile(file.absolutePath) ?: return null
+        val orientation = ExifInterface(file.absolutePath).getAttributeInt(
+            ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL
+        )
+        val degrees = when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> 0f
+        }
+        val matrix = Matrix().apply { postRotate(degrees) }
+        val rotated = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+        val out = Bitmap.createBitmap(rotated.width, rotated.height, Bitmap.Config.ARGB_8888)
+        val contrast = 1.5f
+        val offset = (1f - contrast) * 128f
+        val colour = ColorMatrix(floatArrayOf(
+            contrast * 0.33f, contrast * 0.59f, contrast * 0.11f, 0f, offset,
+            contrast * 0.33f, contrast * 0.59f, contrast * 0.11f, 0f, offset,
+            contrast * 0.33f, contrast * 0.59f, contrast * 0.11f, 0f, offset,
+            0f, 0f, 0f, 1f, 0f
+        ))
+        Canvas(out).drawBitmap(rotated, 0f, 0f, Paint().apply { colorFilter = ColorMatrixColorFilter(colour) })
+        return out
+    }
+
     private fun readPage(file: File) {
-        // ML Kit reads the photo's rotation from its EXIF data, so no manual rotation is needed.
-        val image = InputImage.fromFilePath(this, Uri.fromFile(file))
+        val bitmap = preparePage(file)
+        if (bitmap == null) {
+            status.text = "Couldn't open the photo."
+            return
+        }
+        val image = InputImage.fromBitmap(bitmap, 0)
         recognizer.process(image)
             .addOnSuccessListener { result ->
                 machineText = result.text

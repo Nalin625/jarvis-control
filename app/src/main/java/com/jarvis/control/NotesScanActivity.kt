@@ -109,9 +109,9 @@ class NotesScanActivity : AppCompatActivity() {
             val picture = FrameLayout(context)
             picture.addView(previewView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             picture.addView(liveBoxes, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-            val overlayView: View = highlight
-            picture.addView(overlayView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-            addView(picture, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+            // The camera stays on screen all the time; the scanned page with its highlights appears below it.
+            addView(picture, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(420)))
+            addView(highlight, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(300)))
             addView(status)
             addView(scanButton)
             addView(editor)
@@ -135,6 +135,8 @@ class NotesScanActivity : AppCompatActivity() {
             else status.text = "Camera permission is needed to scan a page."
         }
     }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
@@ -161,8 +163,6 @@ class NotesScanActivity : AppCompatActivity() {
         val file = File(notesDir, "page_${System.currentTimeMillis()}.jpg")
         status.text = "Reading the page..."
         highlight.visibility = View.GONE
-        previewView.visibility = View.VISIBLE
-        liveBoxes.visibility = View.VISIBLE
         capture.takePicture(
             ImageCapture.OutputFileOptions.Builder(file).build(),
             ioExecutor,
@@ -250,8 +250,6 @@ class NotesScanActivity : AppCompatActivity() {
                 val words = result.textBlocks
                     .flatMap { block -> block.lines.flatMap { line -> line.elements } }
                     .mapNotNull { it.boundingBox?.let { box -> RectF(box) } }
-                previewView.visibility = View.GONE
-                liveBoxes.visibility = View.GONE
                 highlight.visibility = View.VISIBLE
                 highlight.show(bitmap, words)
                 editor.setText(machineText)

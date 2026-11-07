@@ -62,6 +62,7 @@ class NotesScanActivity : AppCompatActivity() {
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val liveBusy = AtomicBoolean(false)
     private var lastLiveMs = 0L
+    private val recentReads = ArrayDeque<List<RectF>>()
     private lateinit var status: TextView
     private lateinit var editor: EditText
     private lateinit var saveButton: Button
@@ -228,12 +229,34 @@ class NotesScanActivity : AppCompatActivity() {
                 val boxes = result.textBlocks
                     .flatMap { block -> block.lines.flatMap { line -> line.elements } }
                     .mapNotNull { it.boundingBox?.let { box -> RectF(box) } }
-                runOnUiThread { liveBoxes.setFrame(frameW, frameH, boxes) }
+                runOnUiThread { liveBoxes.setFrame(frameW, frameH, stableBoxes(boxes)) }
             }
             .addOnCompleteListener {
                 liveBusy.set(false)
                 proxy.close()
             }
+    }
+
+    /**
+     * Keeps only the boxes that show up in at least two of the last three live reads, so the highlights
+     * stop flickering when the reader sees a word in one frame and misses it in the next.
+     * Runs on the screen thread only.
+     */
+    private fun stableBoxes(newest: List<RectF>): List<RectF> {
+        recentReads.addLast(newest)
+        while (recentReads.size > 3) recentReads.removeFirst()
+        return newest.filter { box ->
+            recentReads.count { past -> past.any { overlaps(it, box) } } >= 2
+        }
+    }
+
+    private fun overlaps(a: RectF, b: RectF): Boolean {
+        val ix = minOf(a.right, b.right) - maxOf(a.left, b.left)
+        val iy = minOf(a.bottom, b.bottom) - maxOf(a.top, b.top)
+        if (ix <= 0f || iy <= 0f) return false
+        val inter = ix * iy
+        val union = a.width() * a.height() + b.width() * b.height() - inter
+        return inter / union > 0.5f
     }
 
     private fun readPage(file: File) {

@@ -1102,8 +1102,7 @@ class ThemeHomeActivity : AppCompatActivity() {
             Act("LAPTOP", "laptop") { startActivity(Intent(this, RemoteActivity::class.java)) },
             Act("CAMERA", "camera") { startActivity(Intent(this, CameraZoomActivity::class.java)) },
             Act("NOTES", "notes scan") { startActivity(Intent(this, NotesScanActivity::class.java)) },
-            Act("TIME", "globe") { startActivity(Intent(this, TimeActivity::class.java)) },
-            Act("TIMER", "globe") { startActivity(Intent(this, TimerActivity::class.java)) }
+            Act("SIMULATOR", "globe") { startActivity(Intent(this, MidnightSimulatorActivity::class.java)) }
         )
 
         val root = FrameLayout(this)

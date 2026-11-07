@@ -1103,7 +1103,7 @@ class ThemeHomeActivity : AppCompatActivity() {
             Act("CAMERA", "camera") { startActivity(Intent(this, CameraZoomActivity::class.java)) },
             Act("NOTES", "notes scan") { startActivity(Intent(this, NotesScanActivity::class.java)) },
             Act("TIME", "globe") { startActivity(Intent(this, TimeActivity::class.java)) },
-            Act("CLOCK", "globe") { startActivity(Intent(this, MidnightClockActivity::class.java)) }
+            Act("TIMER", "globe") { startActivity(Intent(this, TimerActivity::class.java)) }
         )
 
         val root = FrameLayout(this)

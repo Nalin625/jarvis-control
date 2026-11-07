@@ -293,14 +293,14 @@
             </intent-filter>
         </activity>
         <activity
+            android:name=".TimerActivity"
+            android:exported="false"
+            android:label="Timer"
+            android:theme="@style/Theme.JarvisControl" />
+        <activity
             android:name=".TimeActivity"
             android:exported="false"
             android:label="Time"
-            android:theme="@style/Theme.JarvisControl" />
-        <activity
-            android:name=".MidnightClockActivity"
-            android:exported="false"
-            android:label="Clock"
             android:theme="@style/Theme.JarvisControl" />
         <activity
             android:name=".NotesScanActivity"

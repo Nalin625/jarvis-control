@@ -6,11 +6,13 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.TypedValue
 import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.widget.TextViewCompat
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -70,6 +72,9 @@ class MidnightSimulatorActivity : AppCompatActivity() {
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(0xFFFFFFFF.toInt())
             gravity = Gravity.CENTER
+            maxLines = 1
+            // Grow the time to fill the screen width so it is easy to read and film.
+            TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(this, 48, 120, 2, TypedValue.COMPLEX_UNIT_SP)
         }
         dateText = TextView(this).apply {
             textSize = 18f
@@ -90,7 +95,7 @@ class MidnightSimulatorActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             setPadding(48, 48, 48, 48)
             addView(label)
-            addView(clockText)
+            addView(clockText, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(dateText)
             addView(buttons)
         }

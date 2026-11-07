@@ -53,7 +53,7 @@ class NotesScanActivity : AppCompatActivity() {
     private val ioExecutor = Executors.newSingleThreadExecutor()
 
     private lateinit var previewView: PreviewView
-    private lateinit var overlay: PageOverlayView
+    private lateinit var highlight: PageOverlayView
     private lateinit var status: TextView
     private lateinit var editor: EditText
     private lateinit var saveButton: Button
@@ -66,7 +66,7 @@ class NotesScanActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         previewView = PreviewView(this)
-        overlay = PageOverlayView(this).apply { visibility = View.GONE }
+        highlight = PageOverlayView(this).apply { visibility = View.GONE }
         status = TextView(this).apply {
             text = "Point the camera at the notebook page, then tap SCAN."
             textSize = 16f
@@ -99,7 +99,7 @@ class NotesScanActivity : AppCompatActivity() {
             // The live camera and the highlighted photo share the same space; only one is shown at a time.
             val picture = FrameLayout(context)
             picture.addView(previewView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-            val overlayView: View = overlay
+            val overlayView: View = highlight
             picture.addView(overlayView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             addView(picture, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
             addView(status)
@@ -145,7 +145,7 @@ class NotesScanActivity : AppCompatActivity() {
         }
         val file = File(notesDir, "page_${System.currentTimeMillis()}.jpg")
         status.text = "Reading the page..."
-        overlay.visibility = View.GONE
+        highlight.visibility = View.GONE
         previewView.visibility = View.VISIBLE
         capture.takePicture(
             ImageCapture.OutputFileOptions.Builder(file).build(),
@@ -208,8 +208,8 @@ class NotesScanActivity : AppCompatActivity() {
                     .flatMap { block -> block.lines.flatMap { line -> line.elements } }
                     .mapNotNull { it.boundingBox?.let { box -> RectF(box) } }
                 previewView.visibility = View.GONE
-                overlay.visibility = View.VISIBLE
-                overlay.show(bitmap, words)
+                highlight.visibility = View.VISIBLE
+                highlight.show(bitmap, words)
                 editor.setText(machineText)
                 editor.visibility = View.VISIBLE
                 saveButton.visibility = View.VISIBLE

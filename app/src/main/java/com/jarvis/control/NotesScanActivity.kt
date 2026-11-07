@@ -23,7 +23,11 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
+import androidx.camera.core.ExperimentalGetImage
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
+import java.util.concurrent.atomic.AtomicBoolean
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -54,6 +58,10 @@ class NotesScanActivity : AppCompatActivity() {
 
     private lateinit var previewView: PreviewView
     private lateinit var highlight: PageOverlayView
+    private lateinit var liveBoxes: LiveBoxesView
+    private val analysisExecutor = Executors.newSingleThreadExecutor()
+    private val liveBusy = AtomicBoolean(false)
+    private var lastLiveMs = 0L
     private lateinit var status: TextView
     private lateinit var editor: EditText
     private lateinit var saveButton: Button
@@ -67,6 +75,7 @@ class NotesScanActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         previewView = PreviewView(this)
         highlight = PageOverlayView(this).apply { visibility = View.GONE }
+        liveBoxes = LiveBoxesView(this)
         status = TextView(this).apply {
             text = "Point the camera at the notebook page, then tap SCAN."
             textSize = 16f
@@ -99,6 +108,7 @@ class NotesScanActivity : AppCompatActivity() {
             // The live camera and the highlighted photo share the same space; only one is shown at a time.
             val picture = FrameLayout(context)
             picture.addView(previewView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            picture.addView(liveBoxes, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             val overlayView: View = highlight
             picture.addView(overlayView, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             addView(picture, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -133,7 +143,12 @@ class NotesScanActivity : AppCompatActivity() {
             val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
             val capture = ImageCapture.Builder().build()
             provider.unbindAll()
-            provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
+            // Live reading: the phone reads the words in view about twice a second and draws them over the camera.
+            val analysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+            analysis.setAnalyzer(analysisExecutor) { proxy -> readLive(proxy) }
+            provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture, analysis)
             imageCapture = capture
         }, ContextCompat.getMainExecutor(this))
     }
@@ -147,6 +162,7 @@ class NotesScanActivity : AppCompatActivity() {
         status.text = "Reading the page..."
         highlight.visibility = View.GONE
         previewView.visibility = View.VISIBLE
+        liveBoxes.visibility = View.VISIBLE
         capture.takePicture(
             ImageCapture.OutputFileOptions.Builder(file).build(),
             ioExecutor,
@@ -193,6 +209,33 @@ class NotesScanActivity : AppCompatActivity() {
         return out
     }
 
+    /** Reads the live camera frame and draws the words it can see. Runs about twice a second, one frame at a time. */
+    @OptIn(ExperimentalGetImage::class)
+    private fun readLive(proxy: ImageProxy) {
+        val media = proxy.image
+        val now = System.currentTimeMillis()
+        if (media == null || now - lastLiveMs < 500 || !liveBusy.compareAndSet(false, true)) {
+            proxy.close()
+            return
+        }
+        lastLiveMs = now
+        val rotation = proxy.imageInfo.rotationDegrees
+        val upright = rotation == 90 || rotation == 270
+        val frameW = if (upright) proxy.height else proxy.width
+        val frameH = if (upright) proxy.width else proxy.height
+        recognizer.process(InputImage.fromMediaImage(media, rotation))
+            .addOnSuccessListener { result ->
+                val boxes = result.textBlocks
+                    .flatMap { block -> block.lines.flatMap { line -> line.elements } }
+                    .mapNotNull { it.boundingBox?.let { box -> RectF(box) } }
+                runOnUiThread { liveBoxes.setFrame(frameW, frameH, boxes) }
+            }
+            .addOnCompleteListener {
+                liveBusy.set(false)
+                proxy.close()
+            }
+    }
+
     private fun readPage(file: File) {
         val bitmap = preparePage(file)
         if (bitmap == null) {
@@ -208,6 +251,7 @@ class NotesScanActivity : AppCompatActivity() {
                     .flatMap { block -> block.lines.flatMap { line -> line.elements } }
                     .mapNotNull { it.boundingBox?.let { box -> RectF(box) } }
                 previewView.visibility = View.GONE
+                liveBoxes.visibility = View.GONE
                 highlight.visibility = View.VISIBLE
                 highlight.show(bitmap, words)
                 editor.setText(machineText)
@@ -297,5 +341,37 @@ class PageOverlayView(context: Context) : View(context) {
             canvas.drawRect(box, strokePaint)
         }
         canvas.restore()
+    }
+}
+
+/** Draws yellow boxes live over the camera picture, on the words the phone can see right now. */
+class LiveBoxesView(context: Context) : View(context) {
+
+    private var frameW = 0
+    private var frameH = 0
+    private var frameBoxes: List<RectF> = emptyList()
+    private val mapped = RectF()
+    private val fillPaint = Paint().apply { color = 0x55FFEB3B; style = Paint.Style.FILL }
+    private val strokePaint = Paint().apply { color = 0xFFFFEB3B.toInt(); style = Paint.Style.STROKE; strokeWidth = 5f }
+
+    fun setFrame(w: Int, h: Int, boxes: List<RectF>) {
+        frameW = w
+        frameH = h
+        frameBoxes = boxes
+        invalidate()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        if (frameW == 0 || frameH == 0 || width == 0 || height == 0) return
+        // The preview fills this box and crops the edges, so map camera coordinates onto the screen the same way.
+        val scale = maxOf(width / frameW.toFloat(), height / frameH.toFloat())
+        val dx = (width - frameW * scale) / 2f
+        val dy = (height - frameH * scale) / 2f
+        for (box in frameBoxes) {
+            mapped.set(box.left * scale + dx, box.top * scale + dy, box.right * scale + dx, box.bottom * scale + dy)
+            canvas.drawRect(mapped, fillPaint)
+            canvas.drawRect(mapped, strokePaint)
+        }
     }
 }

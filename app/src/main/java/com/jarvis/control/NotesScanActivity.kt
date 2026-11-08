@@ -10,7 +10,10 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import androidx.exifinterface.media.ExifInterface
 import android.os.Bundle
 import android.view.View
@@ -66,6 +69,8 @@ class NotesScanActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var editor: EditText
     private lateinit var saveButton: Button
+    private lateinit var copyButton: Button
+    private lateinit var shareButton: Button
     private lateinit var stats: TextView
 
     private var imageCapture: ImageCapture? = null
@@ -95,6 +100,26 @@ class NotesScanActivity : AppCompatActivity() {
             visibility = View.GONE
             setOnClickListener { save() }
         }
+        copyButton = Button(this).apply {
+            text = "COPY TEXT"
+            visibility = View.GONE
+            setOnClickListener {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("notes", editor.text.toString()))
+                status.text = "Copied. Paste it into ChatGPT or any app."
+            }
+        }
+        shareButton = Button(this).apply {
+            text = "SEND TO ANOTHER APP"
+            visibility = View.GONE
+            setOnClickListener {
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, editor.text.toString())
+                }
+                startActivity(Intent.createChooser(send, "Send notes to"))
+            }
+        }
         stats = TextView(this).apply { textSize = 15f }
         // The app theme is dark, so give every text box a light colour (otherwise it is black on black).
         val lightText = 0xFFEAEAEA.toInt()
@@ -117,6 +142,8 @@ class NotesScanActivity : AppCompatActivity() {
             addView(scanButton)
             addView(editor)
             addView(saveButton)
+            addView(copyButton)
+            addView(shareButton)
             addView(stats)
         }
         setContentView(ScrollView(this).apply { addView(column) })
@@ -278,6 +305,8 @@ class NotesScanActivity : AppCompatActivity() {
                 editor.setText(machineText)
                 editor.visibility = View.VISIBLE
                 saveButton.visibility = View.VISIBLE
+                copyButton.visibility = View.VISIBLE
+                shareButton.visibility = View.VISIBLE
                 status.text = if (machineText.isBlank())
                     "The phone found no text. Type the page into the box and save."
                 else
@@ -308,6 +337,8 @@ class NotesScanActivity : AppCompatActivity() {
                 editor.setText("")
                 editor.visibility = View.GONE
                 saveButton.visibility = View.GONE
+                copyButton.visibility = View.GONE
+                shareButton.visibility = View.GONE
                 refreshStats()
             }
         }

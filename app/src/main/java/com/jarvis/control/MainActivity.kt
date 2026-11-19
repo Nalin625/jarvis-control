@@ -593,6 +593,9 @@ class MainActivity : AppCompatActivity() {
                 Tile("\uD83C\uDF99", "Mic access") { micPermLauncher.launch(Manifest.permission.RECORD_AUDIO) },
                 Tile("\uD83D\uDD14", "Notif access") { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
                 Tile("\uD83C\uDFA8", "Theme") { toggleTheme() },
+                Tile("\uD83C\uDFE0", "Launcher screen") { HoloHome.showLauncher(this) },
+                Tile("\uD83D\uDCF2", "Set as home") { HoloHome.chooseHomeApp(this) },
+                Tile("\uD83D\uDDC2", "App index") { AppDrawer.open(this) },
                 Tile("\u2699", "Setup") { showPage(4) }
             )),
             PhoneGroup("\uD83D\uDCF1", "HARDWARE", listOf(
@@ -1660,7 +1663,7 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         AppDrawer.onHome(this)
-        HoloHome.onHome(this)
+        HoloHome.onHome(this, intent)
     }
 
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {

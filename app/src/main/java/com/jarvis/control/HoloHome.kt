@@ -68,6 +68,12 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
     private lateinit var stage: Stage
     private lateinit var deck: DeckView
     private var backCb: OnBackPressedCallback? = null
+    private lateinit var rootLp: FrameLayout.LayoutParams
+    private var navHeight = 0
+    private var navView: View? = null
+    /** true = Jarvis is the phone's home screen (launcher look). false = the normal Jarvis Control app. */
+    var launcher = false
+        private set
     private var deckOpen = false
 
     private val burst = listOf(
@@ -114,27 +120,43 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         deck = DeckView(act)
         deck.visibility = View.GONE
         root.addView(deck, FrameLayout.LayoutParams(-1, -1))
-        content.addView(root, FrameLayout.LayoutParams(-1, -1).apply { bottomMargin = navH })
+        rootLp = FrameLayout.LayoutParams(-1, -1).apply { bottomMargin = navH }
+        navHeight = navH
+        navView = nav
+        content.addView(root, rootLp)
 
         (act as? ComponentActivity)?.let { ca ->
             val cb = object : OnBackPressedCallback(false) {
                 override fun handleOnBackPressed() {
+                    if (AppDrawer.closeIfOpen(act)) return
                     if (deckOpen) closeDeck() else stage.closeBurst()
-                    backCb?.isEnabled = deckOpen || stage.burstOpen
+                    // as the home screen, Back does nothing (stays on Home)
                 }
             }
             ca.onBackPressedDispatcher.addCallback(ca, cb)
             backCb = cb
         }
-        // show this Home only while the app is on its Home page
-        val vto = act.window.decorView.viewTreeObserver
-        vto.addOnGlobalLayoutListener {
-            val want = if (pageHome.isShown) View.VISIBLE else View.GONE
-            if (root.visibility != want) {
-                root.visibility = want
-                if (want == View.GONE) { stage.closeBurst(); if (deckOpen) closeDeck() }
-            }
-        }
+        applyMode()
+    }
+
+    /** Launcher look only when Jarvis is the home screen; the normal app screens are untouched. */
+    private fun applyMode() {
+        val want = if (launcher) View.VISIBLE else View.GONE
+        if (root.visibility != want) root.visibility = want
+        if (!launcher) { stage.closeBurst(); if (deckOpen) closeDeck() }
+        rootLp.bottomMargin = if (launcher) 0 else navHeight
+        root.layoutParams = rootLp
+        navView?.visibility = if (launcher) View.GONE else View.VISIBLE
+        updateBack()
+        if (launcher) root.bringToFront()
+    }
+
+    private fun updateBack() { backCb?.isEnabled = launcher || deckOpen || stage.burstOpen }
+
+    fun setLauncher(on: Boolean) {
+        if (launcher == on) return
+        launcher = on
+        applyMode()
     }
 
     fun openDeck() {
@@ -144,7 +166,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         deck.prepare()
         deck.translationY = -root.height.toFloat()
         deck.animate().translationY(0f).setDuration(320).setInterpolator(DecelerateInterpolator(1.6f)).start()
-        backCb?.isEnabled = true
+        updateBack()
     }
 
     fun closeDeck() {
@@ -153,7 +175,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         deck.animate().translationY(-root.height.toFloat()).setDuration(240).withEndAction {
             if (!deckOpen) deck.visibility = View.GONE
         }.start()
-        backCb?.isEnabled = stage.burstOpen
+        updateBack()
     }
 
     /** Presses the original tile of the app with this label. Returns false if this version of the app has no such tile. */
@@ -178,7 +200,11 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         when (it.label) {
             "APPS" -> AppDrawer.open(act)
             "LAPTOP DECK" -> openDeck()
-            else -> it.tile?.let { t -> press(t, "▶ " + it.label) }
+            else -> it.tile?.let { t ->
+                press(t, "▶ " + it.label)
+                // these open a page of the normal app, so leave the launcher look
+                if (t == "PAIR" || t == "SETUP" || t == "LAPTOP STATUS") setLauncher(false)
+            }
         }
     }
 
@@ -327,6 +353,10 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             drawBurst(c)
             drawDial(c, 1f - 0.75f * burstP)
 
+            // chip to go to the normal app
+            txt.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); txt.textAlign = Paint.Align.RIGHT
+            txt.textSize = 10 * d; txt.letterSpacing = 0.18f; txt.color = faded(accent, (230 * calm).toInt())
+            c.drawText("JARVIS APP \u25B8", w - 18 * d, 30 * d, txt)
             // hint + toast
             txt.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); txt.textSize = 9 * d; txt.letterSpacing = 0.18f
             txt.textAlign = Paint.Align.CENTER
@@ -443,7 +473,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
                 addUpdateListener { burstP = (it.animatedValue as Float).coerceAtLeast(0f); invalidate() }
                 start()
             }
-            backCb?.isEnabled = burstOpen || deckOpen
+            updateBack()
         }
 
         private fun snapTo(target: Float) {
@@ -500,6 +530,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         }
 
         private fun tap(x: Float, y: Float) {
+            if (!burstOpen && y < 56 * d && x > width - 150 * d) { setLauncher(false); return }
             if (burstOpen) {
                 for (i in burst.indices) {
                     val pt = burstPos(i, 1f)
@@ -769,14 +800,39 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             val id = act.resources.getIdentifier("pageHome", "id", act.packageName)
             val page = if (id != 0) act.findViewById<View>(id) else null
             if (page == null) return false
+            val keep = instance?.act?.isChangingConfigurations == true
+            val was = instance?.launcher ?: false
             val h = HoloHome(act, page)
             h.build()
+            h.setLauncher(if (keep) was else isHomeIntent(act.intent))
             instance = h
             AppDrawer.hideHandle(act)
             return true
         }
 
+        private fun isHomeIntent(i: android.content.Intent?): Boolean =
+            i != null && i.hasCategory(android.content.Intent.CATEGORY_HOME)
+
+        /** A new intent arrived: the Home button means launcher look, the app icon means the normal app. */
         @JvmStatic
-        fun onHome(act: Activity) { instance?.takeIf { it.act === act }?.let { it.stage.closeBurst(); it.closeDeck() } }
+        fun onHome(act: Activity, intent: android.content.Intent?) {
+            val h = instance?.takeIf { it.act === act } ?: return
+            h.stage.closeBurst(); h.closeDeck()
+            h.setLauncher(isHomeIntent(intent))
+        }
+
+        /** Shows the launcher look inside the app (for a preview). */
+        @JvmStatic
+        fun showLauncher(act: Activity) { instance?.takeIf { it.act === act }?.setLauncher(true) }
+
+        /** Opens the phone's "default home app" picker. */
+        @JvmStatic
+        fun chooseHomeApp(act: Activity) {
+            try { act.startActivity(android.content.Intent(android.provider.Settings.ACTION_HOME_SETTINGS)) }
+            catch (e: Exception) {
+                try { act.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) }
+                catch (e2: Exception) { Toast.makeText(act, "Settings > Apps > Default apps > Home app", Toast.LENGTH_LONG).show() }
+            }
+        }
     }
 }

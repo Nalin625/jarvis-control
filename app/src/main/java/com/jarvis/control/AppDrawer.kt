@@ -453,6 +453,14 @@ class AppDrawer private constructor(private val act: Activity) {
             instance = dr
         }
 
+        /** Closes the app index if it is open. Returns true if it was. */
+        @JvmStatic
+        fun closeIfOpen(act: Activity): Boolean {
+            val i = instance?.takeIf { it.act === act } ?: return false
+            if (!i.isOpen) return false
+            i.close(); return true
+        }
+
         /** Opens the app index (used by the new Home). */
         @JvmStatic
         fun open(act: Activity) { if (instance?.act === act) instance?.open() }

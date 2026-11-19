@@ -90,6 +90,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        AppDrawer.attach(this)
+        HoloHome.attach(this)
 
         // ---- Jarvis home screen: reactor on top; HOLD it to open every app on the phone ----
         run {
@@ -1653,6 +1655,17 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        AppDrawer.onHome(this)
+        HoloHome.onHome(this)
+    }
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        AppDrawer.touch(this, ev)
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onResume() {

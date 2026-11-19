@@ -208,6 +208,54 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         }
     }
 
+    // ------------------------------------------------------------------ SERVER / MIC / NOTIFS switches
+
+    private val prefs by lazy { act.getSharedPreferences("jarvis_control", Context.MODE_PRIVATE) }
+
+    private fun notifAccessGranted(): Boolean =
+        (android.provider.Settings.Secure.getString(act.contentResolver, "enabled_notification_listeners") ?: "").contains(act.packageName)
+
+    private fun serverOn() = JarvisService.running
+    private fun micOn() = prefs.getBoolean("wake_listen", false) && MicService.hasPermission(act)
+    private fun notifOn() = prefs.getBoolean("notif_forward_enabled", false) && notifAccessGranted()
+
+    private fun say(s: String) = stage.flash(s)
+
+    private fun toggleServer() {
+        if (JarvisService.running) {
+            act.stopService(android.content.Intent(act, JarvisService::class.java)); say("SERVER STOPPED")
+        } else {
+            val token = prefs.getString("token", "") ?: ""
+            if (token.isEmpty()) { Toast.makeText(act, "Open the Jarvis app once (CORE page) to create the server token", Toast.LENGTH_LONG).show(); return }
+            act.startForegroundService(android.content.Intent(act, JarvisService::class.java).putExtra(JarvisService.ACTION_TOKEN_EXTRA, token))
+            say("SERVER STARTED")
+        }
+        ui.postDelayed({ stage.readSwitches(); stage.invalidate() }, 700L)
+    }
+
+    private fun toggleMic() {
+        if (!MicService.hasPermission(act)) {
+            act.requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 4411)
+            say("ALLOW THE MIC, THEN TAP AGAIN"); return
+        }
+        if (prefs.getBoolean("wake_listen", false)) { MicService.setListening(act, false); say("MIC OFF") }
+        else { MicService.start(act); MicService.setListening(act, true); say("LISTENING FOR THE WAKE WORD") }
+        stage.readSwitches(); stage.invalidate()
+    }
+
+    private fun toggleNotif() {
+        val granted = notifAccessGranted()
+        when {
+            notifOn() -> { prefs.edit().putBoolean("notif_forward_enabled", false).apply(); say("NOTIFICATIONS STAY ON THE PHONE") }
+            !granted -> {
+                say("ALLOW JARVIS IN THE LIST")
+                act.startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+            }
+            else -> { prefs.edit().putBoolean("notif_forward_enabled", true).apply(); say("NOTIFICATIONS GO TO THE LAPTOP") }
+        }
+        stage.readSwitches(); stage.invalidate()
+    }
+
     // ------------------------------------------------------------------ shared drawing helpers
 
     private fun hex(p: Path, cx: Float, cy: Float, r: Float) {
@@ -280,6 +328,13 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         private var timeText = ""; private var dateText = ""; private var tick = 0f
 
         var burstOpen = false
+        private var sv = false; private var mc = false; private var nt = false
+        private val okCol = act.getColor(R.color.success)
+        private val chipR = RectF()
+        fun readSwitches() { try { sv = serverOn(); mc = micOn(); nt = notifOn() } catch (e: Exception) { } }
+        private fun chipTop() = (cy + cr + dTop - 34 * d) / 2f - 25 * d
+        private fun chipLeft(i: Int): Float { val w = (width - 40 * d - 16 * d) / 3f; return 20 * d + i * (w + 8 * d) }
+        private fun chipW() = (width - 40 * d - 16 * d) / 3f
         private var burstP = 0f
         private var burstAnim: ValueAnimator? = null
         private var pos = 0f
@@ -298,6 +353,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
 
         override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
             super.onSizeChanged(w, h, ow, oh)
+            readSwitches()
             cx = w / 2f
             cr = min(w * 0.27f, h * 0.17f)
             cy = h * 0.30f
@@ -321,6 +377,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
                 dateText = String.format(Locale.getDefault(), "%1\$tA  %1\$td %1\$tb", cal).uppercase(Locale.getDefault())
             }
             if (toastA > 0f) toastA = (toastA - dt * 0.7f).coerceAtLeast(0f)
+            if (tick == 0f) readSwitches()
         }
 
         fun flash(s: String) { toast = s; toastA = 1f }
@@ -351,6 +408,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             c.drawText("J.A.R.V.I.S  ·  $dateText", cx, cy - cr - 68 * d, txt)
             drawCore(c)
             drawBurst(c)
+            drawChips(c, calm)
             drawDial(c, 1f - 0.75f * burstP)
 
             // chip to go to the normal app
@@ -365,6 +423,24 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             if (toastA > 0f) {
                 txt.textSize = 12 * d; txt.letterSpacing = 0.2f; txt.color = faded(accent, (255 * toastA).toInt())
                 c.drawText(toast, cx, cy + cr + 30 * d, txt)
+            }
+        }
+
+        private fun drawChips(c: Canvas, a: Float) {
+            if (a <= 0.02f) return
+            val names = arrayOf("SERVER", "MIC", "NOTIFS"); val on = booleanArrayOf(sv, mc, nt)
+            for (i in 0..2) {
+                val l = chipLeft(i); val t = chipTop()
+                chipR.set(l, t, l + chipW(), t + 50 * d)
+                val col = if (on[i]) okCol else warn
+                hfill.color = faded(col, (30 * a).toInt()); c.drawRoundRect(chipR, 14 * d, 14 * d, hfill)
+                line.color = faded(if (on[i]) col else edge, (200 * a).toInt()); line.strokeWidth = 1.3f * d
+                c.drawRoundRect(chipR, 14 * d, 14 * d, line)
+                txt.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); txt.textAlign = Paint.Align.CENTER
+                txt.textSize = 9 * d; txt.letterSpacing = 0.2f; txt.color = faded(dim, (230 * a).toInt())
+                c.drawText(names[i], l + chipW() / 2, t + 20 * d, txt)
+                txt.textSize = 15 * d; txt.letterSpacing = 0.1f; txt.color = faded(col, (255 * a).toInt())
+                c.drawText(if (on[i]) "ON" else "OFF", l + chipW() / 2, t + 40 * d, txt)
             }
         }
 
@@ -537,6 +613,13 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
                     if (hypot(x - pt[0], y - pt[1]) < 34 * d) { closeBurst(); fire(burst[i]); return }
                 }
                 closeBurst(); return
+            }
+            if (y > chipTop() && y < chipTop() + 50 * d) {
+                for (i in 0..2) if (x >= chipLeft(i) && x <= chipLeft(i) + chipW()) {
+                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    when (i) { 0 -> toggleServer(); 1 -> toggleMic(); else -> toggleNotif() }
+                    return
+                }
             }
             if (hypot(x - cx, y - cy) < cr) {
                 performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)

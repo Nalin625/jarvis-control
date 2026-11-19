@@ -1087,8 +1087,28 @@ class ThemeHomeActivity : AppCompatActivity() {
         return super.dispatchTouchEvent(ev)
     }
 
+    /** The home screen is now the Jarvis Control launcher look (core + dial). This old screen just forwards there. */
+    private fun toJarvisHome(): Boolean = try {
+        startActivity(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                .setClass(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+        finish()
+        overridePendingTransition(0, 0)
+        true
+    } catch (e: Exception) {
+        false
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        toJarvisHome()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (toJarvisHome()) return
         window.statusBarColor = C_BG
         window.navigationBarColor = C_BG
 

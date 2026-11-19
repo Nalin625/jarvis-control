@@ -414,7 +414,39 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         var burstOpen = false
         private var sv = false; private var mc = false; private var nt = false
         private val okCol = act.getColor(R.color.success)
-        fun readSwitches() { try { sv = serverOn(); mc = micOn(); nt = notifOn() } catch (e: Exception) { } }
+        // live info: battery, network, laptop reachability, unread laptop notifications
+        private var bat = -1; private var charging = false; private var netText = "--"
+        private var lap = -1; private var unread = -1; private var lastPoll = 0L
+        fun readSwitches() {
+            try { sv = serverOn(); mc = micOn(); nt = notifOn() } catch (e: Exception) { }
+            try {
+                val b = act.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+                if (b != null) {
+                    val lv = b.getIntExtra("level", -1); val sc = b.getIntExtra("scale", 100)
+                    bat = if (lv >= 0 && sc > 0) lv * 100 / sc else -1
+                    val st = b.getIntExtra("status", -1)
+                    charging = st == 2 || st == 5
+                }
+                val cm = act.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+                val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+                netText = when {
+                    caps == null -> "OFFLINE"
+                    caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "WI-FI"
+                    caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "MOBILE"
+                    else -> "ONLINE"
+                }
+            } catch (e: Exception) { }
+            val now = System.currentTimeMillis()
+            if (now - lastPoll > 45_000L) {
+                lastPoll = now
+                Thread {
+                    if (!LaptopApi.paired(act)) { lap = -1; unread = -1 } else {
+                        val r = LaptopApi.call(act, "GET", "/phone_notifications?limit=1", null, 3000)
+                        if (r.has("error")) { lap = 0 } else { lap = 1; unread = r.optInt("unread", 0) }
+                    }
+                }.start()
+            }
+        }
         private var burstP = 0f
         private var burstAnim: ValueAnimator? = null
         private var pos = 0f
@@ -487,6 +519,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             txt.color = faded(accent, (230 * calm).toInt())
             c.drawText("J.A.R.V.I.S  ·  $dateText", cx, cy - cr - 68 * d, txt)
             drawCore(c)
+            drawStats(c, calm)
             drawBurst(c)
             drawDial(c, 1f - 0.75f * burstP)
 
@@ -505,6 +538,31 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             }
         }
 
+        private fun drawStats(c: Canvas, a: Float) {
+            if (a <= 0.02f) return
+            val top = (cy + cr + dTop - 34 * d) / 2f - 28 * d
+            val l = 18 * d; val r = width - 18 * d; val h = 56 * d
+            oval.set(l, top, r, top + h)
+            hfill.color = faded(accent, (14 * a).toInt()); c.drawRoundRect(oval, 16 * d, 16 * d, hfill)
+            line.color = faded(edge, (200 * a).toInt()); line.strokeWidth = 1.2f * d; c.drawRoundRect(oval, 16 * d, 16 * d, line)
+            val names = arrayOf("BATTERY", "NETWORK", "LAPTOP", "INBOX")
+            val vals = arrayOf(if (bat < 0) "--" else "$bat%" + (if (charging) "\u26A1" else ""), netText,
+                when (lap) { 1 -> "ONLINE"; 0 -> "OFFLINE"; else -> "NOT PAIRED" },
+                if (unread < 0) "--" else if (unread == 0) "CLEAR" else "$unread NEW")
+            val cols = intArrayOf(if (bat in 0..19 && !charging) warn else okCol, accent,
+                if (lap == 1) okCol else if (lap == 0) warn else dim, if (unread > 0) warn else accent)
+            val cw = (r - l) / 4f
+            for (i in 0..3) {
+                val x = l + cw * (i + 0.5f)
+                if (i > 0) { line.color = faded(edge, (150 * a).toInt()); c.drawLine(l + cw * i, top + 12 * d, l + cw * i, top + h - 12 * d, line) }
+                txt.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); txt.textAlign = Paint.Align.CENTER
+                txt.textSize = 8 * d; txt.letterSpacing = 0.18f; txt.color = faded(dim, (230 * a).toInt())
+                c.drawText(names[i], x, top + 21 * d, txt)
+                txt.textSize = (if (vals[i].length > 7) 10 else 13) * d; txt.letterSpacing = 0.05f; txt.color = faded(cols[i], (255 * a).toInt())
+                c.drawText(vals[i], x, top + 41 * d, txt)
+            }
+        }
+
         private fun drawCore(c: Canvas) {
             val breathe = 0.5f + 0.5f * sin(pulse)
             val r = cr * (1f - 0.06f * burstP)
@@ -513,6 +571,12 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             stroke.shader = null; stroke.color = faded(accent, 90); stroke.strokeWidth = 1.5f * d
             stroke.pathEffect = android.graphics.DashPathEffect(floatArrayOf(5 * d, 9 * d), rot * 0.6f)
             c.drawCircle(cx, cy, r * 0.98f, stroke); stroke.pathEffect = null
+            if (bat >= 0) {
+                oval.set(cx - r * 1.1f, cy - r * 1.1f, cx + r * 1.1f, cy + r * 1.1f)
+                stroke.color = faded(edge, 160); stroke.strokeWidth = 3f * d; c.drawArc(oval, 0f, 360f, false, stroke)
+                stroke.color = if (bat < 20 && !charging) warn else if (charging) okCol else accent
+                c.drawArc(oval, -90f, 360f * bat / 100f, false, stroke)
+            }
             c.save(); c.rotate(-rot * 0.15f, cx, cy)
             stroke.color = faded(accent, 140); stroke.strokeWidth = 1.2f * d
             for (i in 0 until 72) {
@@ -547,6 +611,8 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         private fun drawBurst(c: Canvas) {
             if (burstP <= 0.01f) return
             val p = burstP
+            val sh = (1f - p.coerceIn(0f, 1f))
+            if (sh > 0.02f) { line.color = faded(accent, (200 * sh).toInt()); line.strokeWidth = 2f * d; c.drawCircle(cx, cy, cr * (1f + 0.9f * p.coerceIn(0f, 1f)), line) }
             val states = booleanArrayOf(sv, mc, nt)
             for (i in burst.indices) {
                 val pt = burstPos(i, p)
@@ -596,7 +662,18 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
                 val sc = 1f - 0.2f * min(dist, 2.5f)
                 val a = ((1f - 0.3f * dist).coerceIn(0.12f, 1f) * 255 * alpha).toInt()
                 val item = dial[mod(b + k, dial.size)]
+                if (dist < 0.6f) {
+                    val gl = (1f - dist / 0.6f) * (0.6f + 0.4f * sin(pulse * 1.3f))
+                    for (q in 1..3) { hfill.color = faded(accent, (a * 0.07f * gl / q).toInt()); c.drawCircle(x, y, 34 * d * sc + q * 9 * d, hfill) }
+                }
                 drawHexIcon(c, item, x, y, 34 * d * sc, dist < 0.5f, a, hexP, line, hfill, ic)
+                if (item.label == "NOTIFICATIONS" && unread > 0) {
+                    val bx = x + 26 * d * sc; val by = y - 26 * d * sc
+                    hfill.color = faded(warn, a); c.drawCircle(bx, by, 10 * d, hfill)
+                    txt.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); txt.textAlign = Paint.Align.CENTER
+                    txt.textSize = 10 * d; txt.letterSpacing = 0f; txt.color = faded(bgc, a)
+                    c.drawText(if (unread > 99) "99+" else unread.toString(), bx, by + 3.5f * d, txt)
+                }
             }
             val cur = dial[mod(b, dial.size)]
             val near = 1f - min(1f, abs(pos - b) * 2f)

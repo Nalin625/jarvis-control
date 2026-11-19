@@ -13,6 +13,7 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.SweepGradient
 import android.graphics.Typeface
+import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import android.text.format.DateFormat
@@ -27,6 +28,7 @@ import android.view.animation.DecelerateInterpolator
 import android.view.animation.LinearInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -54,7 +56,7 @@ import kotlin.math.sin
  */
 class HoloHome private constructor(private val act: Activity, private val pageHome: View) {
 
-    class Item(val label: String, val icon: String, val tile: String?, val risky: Boolean = false)
+    class Item(val label: String, val icon: String, val tile: String?, val risky: Boolean = false, val run: (() -> String)? = null)
 
     private val accent = act.getColor(R.color.accent)
     private val dim = act.getColor(R.color.text_dim)
@@ -75,19 +77,77 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
     var launcher = false
         private set
     private var deckOpen = false
+    private var inboxOpen = false
+    private lateinit var inbox: InboxPanel
 
+    // the core opens exactly these three switches
     private val burst = listOf(
-        Item("SERVER ON", "bolt", "SERVER ON"), Item("SERVER OFF", "stop", "SERVER OFF"),
-        Item("FIND LAPTOP", "radar", "FIND LAPTOP"), Item("PAIR", "link", "PAIR"),
-        Item("REMOTE", "remote", "REMOTE"), Item("SHARE", "share", "SHARE SCREEN")
+        Item("SERVER", "bolt", null), Item("MIC", "mic", null), Item("NOTIFY", "bell", null)
     )
     private val dial = listOf(
-        Item("APPS", "apps", null), Item("LAPTOP DECK", "laptop", null),
-        Item("LAPTOP STATUS", "bars", "LAPTOP STATUS"), Item("PASTE TO LAPTOP", "paste", "PASTE TO LAPTOP"),
-        Item("MIC ACCESS", "mic", "MIC ACCESS"), Item("NOTIFICATIONS", "bell", "NOTIF ACCESS"),
-        Item("THEME", "theme", "THEME"), Item("SETUP", "sliders", "SETUP")
+        Item("PHONE DECK", "phone", null), Item("NOTIFICATIONS", "bell", null), Item("LAPTOP DECK", "laptop", null),
+        Item("FIND LAPTOP", "radar", "FIND LAPTOP"), Item("REMOTE", "remote", "REMOTE"),
+        Item("SHARE SCREEN", "share", "SHARE SCREEN"), Item("PASTE TO LAPTOP", "paste", "PASTE TO LAPTOP"),
+        Item("PAIR", "link", "PAIR"), Item("THEME", "theme", "THEME"), Item("SETUP", "sliders", "SETUP")
     )
-    private val groups = listOf(
+
+    private fun volDown(): String {
+        val am = act.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
+        return "VOLUME " + am.getStreamVolume(AudioManager.STREAM_MUSIC) + " / " + am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+    }
+
+    private fun media(k: String, say: String): String = if (PhoneMedia.send(act, k)) say else "NO PLAYER ACTIVE"
+
+    /** Phone-only controls (they run on this phone and do not need the laptop). */
+    private val phoneGroups = listOf(
+        "SOUND" to listOf(
+            Item("VOLUME UP", "volup", null, false) { PhoneTools.musicVolumeUp(act).uppercase() },
+            Item("VOLUME DOWN", "voldn", null, false) { volDown() },
+            Item("PLAY / PAUSE", "play", null, false) { media("play_pause", "PLAY / PAUSE") },
+            Item("NEXT SONG", "next", null, false) { media("next", "NEXT SONG") },
+            Item("PREVIOUS SONG", "prev", null, false) { media("prev", "PREVIOUS SONG") },
+            Item("RING MODE", "bell", null, false) { PhoneRinger.set(act, "normal") ?: "RINGER ON" },
+            Item("VIBRATE ONLY", "buzz", null, false) { PhoneRinger.set(act, "vibrate") ?: "VIBRATE ONLY" },
+            Item("SILENT", "mute", null, false) { PhoneRinger.set(act, "silent") ?: "SILENT" }),
+        "LIGHT" to listOf(
+            Item("FLASHLIGHT", "torch", null, false) { PhoneTools.flashlight(act).uppercase() },
+            Item("BRIGHTER", "sun", null, false) { PhoneTools2.brightnessUp(act).uppercase() },
+            Item("DIMMER", "moon", null, false) { PhoneTools2.brightnessDown(act).uppercase() },
+            Item("AUTO-ROTATE", "refresh", null, false) { PhoneTools2.autoRotate(act).uppercase() },
+            Item("KEEP SCREEN ON", "eye", null, false) { PhoneTools2.keepScreenOn(act).uppercase() },
+            Item("SOS FLASH", "alert", null, false) { PhoneTools2.flashSos(act).uppercase() },
+            Item("DISPLAY SETTINGS", "sliders", null, false) { PhoneTools2.displaySettings(act).uppercase() }),
+        "CONNECT" to listOf(
+            Item("WI-FI", "wifi", null, false) { PhoneTools.openWifi(act).uppercase() },
+            Item("BLUETOOTH", "bt", null, false) { PhoneTools.openBluetooth(act).uppercase() },
+            Item("HOTSPOT", "hotspot", null, false) { PhoneTools2.hotspot(act).uppercase() },
+            Item("AIRPLANE MODE", "plane", null, false) { PhoneTools2.airplaneMode(act).uppercase() },
+            Item("DO NOT DISTURB", "moon", null, false) { PhoneTools.openDnd(act).uppercase() },
+            Item("LOCATION", "pin", null, false) { PhoneTools2.locationSettings(act).uppercase() }),
+        "INFO" to listOf(
+            Item("BATTERY", "battery", null, false) { PhoneTools.battery(act).uppercase() },
+            Item("STORAGE", "disk", null, false) { PhoneTools.storage(act).uppercase() },
+            Item("PHONE INFO", "info", null, false) { PhoneTools.info(act).uppercase() },
+            Item("BUZZ", "buzz", null, false) { PhoneTools.buzz(act).uppercase() },
+            Item("HEARTBEAT", "heart", null, false) { PhoneTools2.heartbeat(act).uppercase() },
+            Item("LAST CALL", "phone", null, false) { PhoneTools.lastCall(act).take(60).uppercase() }),
+        "OPEN" to listOf(
+            Item("CAMERA", "camera", null, false) { PhoneTools.openCamera(act).uppercase() },
+            Item("CLOCK", "clock", null, false) { PhoneTools2.openClock(act).uppercase() },
+            Item("TIMER", "timer", null, false) { PhoneTools2.oneMinuteTimer(act).uppercase() },
+            Item("CALENDAR", "cal", null, false) { PhoneTools2.openCalendar(act).uppercase() },
+            Item("CONTACTS", "people", null, false) { PhoneTools2.openContacts(act).uppercase() },
+            Item("GALLERY", "image", null, false) { PhoneTools2.openGallery(act).uppercase() },
+            Item("MAPS", "pin", null, false) { PhoneTools2.openMaps(act).uppercase() },
+            Item("CALCULATOR", "calc", null, false) { PhoneTools2.openCalculator(act).uppercase() },
+            Item("WHATSAPP", "chat", null, false) { PhoneTools2.openWhatsApp(act).uppercase() },
+            Item("GMAIL", "mail", null, false) { PhoneTools2.openGmail(act).uppercase() },
+            Item("YOUTUBE", "play", null, false) { PhoneTools2.openYouTube(act).uppercase() },
+            Item("MUSIC", "music", null, false) { PhoneTools2.openMusic(act).uppercase() })
+    )
+
+    private val laptopGroups = listOf(
         "AUDIO" to listOf(Item("VOLUME UP", "volup", "VOL UP"), Item("VOLUME DOWN", "voldn", "VOL DOWN"),
             Item("MUTE", "mute", "MUTE"), Item("UNMUTE", "unmute", "UNMUTE")),
         "DISPLAY" to listOf(Item("BRIGHTER", "sun", "BRIGHT +"), Item("DIMMER", "moon", "BRIGHT -"),
@@ -123,12 +183,16 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         rootLp = FrameLayout.LayoutParams(-1, -1).apply { bottomMargin = navH }
         navHeight = navH
         navView = nav
+        inbox = InboxPanel(act)
+        inbox.visibility = View.GONE
+        root.addView(inbox, FrameLayout.LayoutParams(-1, -1))
         content.addView(root, rootLp)
 
         (act as? ComponentActivity)?.let { ca ->
             val cb = object : OnBackPressedCallback(false) {
                 override fun handleOnBackPressed() {
                     if (AppDrawer.closeIfOpen(act)) return
+                    if (inboxOpen) { closeInbox(); return }
                     if (deckOpen) closeDeck() else stage.closeBurst()
                     // as the home screen, Back does nothing (stays on Home)
                 }
@@ -143,7 +207,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
     private fun applyMode() {
         val want = if (launcher) View.VISIBLE else View.GONE
         if (root.visibility != want) root.visibility = want
-        if (!launcher) { stage.closeBurst(); if (deckOpen) closeDeck() }
+        if (!launcher) { stage.closeBurst(); if (deckOpen) closeDeck(); if (inboxOpen) closeInbox() }
         rootLp.bottomMargin = if (launcher) 0 else navHeight
         root.layoutParams = rootLp
         navView?.visibility = if (launcher) View.GONE else View.VISIBLE
@@ -151,7 +215,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         if (launcher) root.bringToFront()
     }
 
-    private fun updateBack() { backCb?.isEnabled = launcher || deckOpen || stage.burstOpen }
+    private fun updateBack() { backCb?.isEnabled = launcher || deckOpen || inboxOpen || stage.burstOpen }
 
     fun setLauncher(on: Boolean) {
         if (launcher == on) return
@@ -159,13 +223,32 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         applyMode()
     }
 
-    fun openDeck() {
+    fun openDeck(phone: Boolean = true) {
         if (deckOpen) return
         deckOpen = true
         deck.visibility = View.VISIBLE
-        deck.prepare()
+        if (phone) deck.prepare("PHONE DECK", phoneGroups) else deck.prepare("LAPTOP DECK", laptopGroups)
         deck.translationY = -root.height.toFloat()
         deck.animate().translationY(0f).setDuration(320).setInterpolator(DecelerateInterpolator(1.6f)).start()
+        updateBack()
+    }
+
+    fun openInbox() {
+        if (inboxOpen) return
+        inboxOpen = true
+        inbox.visibility = View.VISIBLE
+        inbox.translationY = root.height.toFloat()
+        inbox.animate().translationY(0f).setDuration(300).setInterpolator(DecelerateInterpolator(1.6f)).start()
+        inbox.load()
+        updateBack()
+    }
+
+    fun closeInbox() {
+        if (!inboxOpen) return
+        inboxOpen = false
+        inbox.animate().translationY(root.height.toFloat()).setDuration(240).withEndAction {
+            if (!inboxOpen) inbox.visibility = View.GONE
+        }.start()
         updateBack()
     }
 
@@ -198,8 +281,9 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
 
     private fun fire(it: Item) {
         when (it.label) {
-            "APPS" -> AppDrawer.open(act)
-            "LAPTOP DECK" -> openDeck()
+            "PHONE DECK" -> openDeck(true)
+            "LAPTOP DECK" -> openDeck(false)
+            "NOTIFICATIONS" -> openInbox()
             else -> it.tile?.let { t ->
                 press(t, "▶ " + it.label)
                 // these open a page of the normal app, so leave the launcher look
@@ -330,11 +414,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         var burstOpen = false
         private var sv = false; private var mc = false; private var nt = false
         private val okCol = act.getColor(R.color.success)
-        private val chipR = RectF()
         fun readSwitches() { try { sv = serverOn(); mc = micOn(); nt = notifOn() } catch (e: Exception) { } }
-        private fun chipTop() = (cy + cr + dTop - 34 * d) / 2f - 25 * d
-        private fun chipLeft(i: Int): Float { val w = (width - 40 * d - 16 * d) / 3f; return 20 * d + i * (w + 8 * d) }
-        private fun chipW() = (width - 40 * d - 16 * d) / 3f
         private var burstP = 0f
         private var burstAnim: ValueAnimator? = null
         private var pos = 0f
@@ -408,7 +488,6 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             c.drawText("J.A.R.V.I.S  ·  $dateText", cx, cy - cr - 68 * d, txt)
             drawCore(c)
             drawBurst(c)
-            drawChips(c, calm)
             drawDial(c, 1f - 0.75f * burstP)
 
             // chip to go to the normal app
@@ -419,28 +498,10 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             txt.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); txt.textSize = 9 * d; txt.letterSpacing = 0.18f
             txt.textAlign = Paint.Align.CENTER
             txt.color = faded(dim, (150 * calm).toInt())
-            c.drawText("↑ APPS    ·    ↓ DECK    ·    TAP THE CORE", cx, h - 16 * d, txt)
+            c.drawText("↑ APPS    ·    ↓ PHONE DECK    ·    TAP THE CORE", cx, h - 16 * d, txt)
             if (toastA > 0f) {
                 txt.textSize = 12 * d; txt.letterSpacing = 0.2f; txt.color = faded(accent, (255 * toastA).toInt())
                 c.drawText(toast, cx, cy + cr + 30 * d, txt)
-            }
-        }
-
-        private fun drawChips(c: Canvas, a: Float) {
-            if (a <= 0.02f) return
-            val names = arrayOf("SERVER", "MIC", "NOTIFS"); val on = booleanArrayOf(sv, mc, nt)
-            for (i in 0..2) {
-                val l = chipLeft(i); val t = chipTop()
-                chipR.set(l, t, l + chipW(), t + 50 * d)
-                val col = if (on[i]) okCol else warn
-                hfill.color = faded(col, (30 * a).toInt()); c.drawRoundRect(chipR, 14 * d, 14 * d, hfill)
-                line.color = faded(if (on[i]) col else edge, (200 * a).toInt()); line.strokeWidth = 1.3f * d
-                c.drawRoundRect(chipR, 14 * d, 14 * d, line)
-                txt.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); txt.textAlign = Paint.Align.CENTER
-                txt.textSize = 9 * d; txt.letterSpacing = 0.2f; txt.color = faded(dim, (230 * a).toInt())
-                c.drawText(names[i], l + chipW() / 2, t + 20 * d, txt)
-                txt.textSize = 15 * d; txt.letterSpacing = 0.1f; txt.color = faded(col, (255 * a).toInt())
-                c.drawText(if (on[i]) "ON" else "OFF", l + chipW() / 2, t + 40 * d, txt)
             }
         }
 
@@ -479,22 +540,30 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
 
         private fun burstPos(i: Int, p: Float): FloatArray {
             val ang = Math.toRadians((BURST_ANG[i]).toDouble())
-            val rr = (cr + 54 * d) * p
+            val rr = (cr + 66 * d) * p
             return floatArrayOf((cx + rr * cos(ang)).toFloat(), (cy + rr * sin(ang)).toFloat())
         }
 
         private fun drawBurst(c: Canvas) {
             if (burstP <= 0.01f) return
             val p = burstP
+            val states = booleanArrayOf(sv, mc, nt)
             for (i in burst.indices) {
                 val pt = burstPos(i, p)
-                line.color = faded(accent, (90 * p).toInt()); line.strokeWidth = 1f * d
+                val col = if (states[i]) okCol else warn
+                line.color = faded(col, (110 * p).toInt()); line.strokeWidth = 1.2f * d
                 c.drawLine(cx, cy, pt[0], pt[1], line)
-                drawHexIcon(c, burst[i], pt[0], pt[1], 25 * d * (0.4f + 0.6f * p), true, (255 * p).toInt().coerceIn(0, 255), hexP, line, hfill, ic,
-                    burst[i].label == "SERVER OFF")
-                txt.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); txt.textSize = 8 * d; txt.letterSpacing = 0.12f
+                val r = 32 * d * (0.4f + 0.6f * p)
+                hex(hexP, pt[0], pt[1], r)
+                hfill.color = faded(col, (if (states[i]) 70 else 40) * (255 * p).toInt() / 255); c.drawPath(hexP, hfill)
+                line.color = faded(col, (255 * p).toInt().coerceIn(0, 255)); line.strokeWidth = 2f * d; c.drawPath(hexP, line)
+                ic.color = faded(col, (255 * p).toInt().coerceIn(0, 255))
+                Ico.draw(c, burst[i].icon, pt[0], pt[1], r * 0.95f, ic)
+                txt.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); txt.textSize = 9 * d; txt.letterSpacing = 0.15f
                 txt.textAlign = Paint.Align.CENTER; txt.color = faded(textMain, (230 * p).toInt())
-                c.drawText(burst[i].label, pt[0], pt[1] + 25 * d + 13 * d, txt)
+                c.drawText(burst[i].label, pt[0], pt[1] + r + 14 * d, txt)
+                txt.textSize = 13 * d; txt.color = faded(col, (255 * p).toInt().coerceIn(0, 255))
+                c.drawText(if (states[i]) "ON" else "OFF", pt[0], pt[1] + r + 30 * d, txt)
             }
         }
 
@@ -610,16 +679,9 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             if (burstOpen) {
                 for (i in burst.indices) {
                     val pt = burstPos(i, 1f)
-                    if (hypot(x - pt[0], y - pt[1]) < 34 * d) { closeBurst(); fire(burst[i]); return }
+                    if (hypot(x - pt[0], y - pt[1]) < 38 * d) { performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); when (i) { 0 -> toggleServer(); 1 -> toggleMic(); else -> toggleNotif() }; return }
                 }
                 closeBurst(); return
-            }
-            if (y > chipTop() && y < chipTop() + 50 * d) {
-                for (i in 0..2) if (x >= chipLeft(i) && x <= chipLeft(i) + chipW()) {
-                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                    when (i) { 0 -> toggleServer(); 1 -> toggleMic(); else -> toggleNotif() }
-                    return
-                }
             }
             if (hypot(x - cx, y - cy) < cr) {
                 performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -651,6 +713,8 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         private val hexP = Path()
         private val oval = RectF()
 
+        private var gr: List<Pair<String, List<Item>>> = phoneGroups
+        private var title = "PHONE DECK"
         private var tab = 0
         private var tabX = 0f
         private var pos = 0f
@@ -664,12 +728,12 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         private var vt: VelocityTracker? = null
         private var sent = ""; private var sentA = 0f
 
-        private fun items() = groups[tab].second
+        private fun items() = gr[tab].second
         private fun pitch() = 70 * d
         private val stepRad = 0.46f
         private fun radius() = pitch() / stepRad
 
-        fun prepare() { tab = 0; tabX = 0f; pos = 0f; lastDetent = 0; invalidate() }
+        fun prepare(t: String, g: List<Pair<String, List<Item>>>) { title = t; gr = g; tab = 0; tabX = 0f; pos = 0f; lastDetent = 0; invalidate() }
 
         override fun frame(dt: Float) {
             scan = (scan + dt * 0.5f) % 1f
@@ -694,16 +758,16 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             // header
             txt.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); txt.textAlign = Paint.Align.LEFT
             txt.textSize = 11 * d; txt.letterSpacing = 0.25f; txt.color = accent
-            c.drawText("◢ LAPTOP DECK", 24 * d, 38 * d, txt)
+            c.drawText("◢ " + title, 24 * d, 38 * d, txt)
             txt.textAlign = Paint.Align.RIGHT; txt.textSize = 9 * d; txt.color = dim; txt.letterSpacing = 0.15f
             c.drawText("SWIPE UP TO CLOSE", w - 24 * d, 38 * d, txt)
             // tabs
-            val tw = (w - 48 * d) / groups.size
-            for (i in groups.indices) {
+            val tw = (w - 48 * d) / gr.size
+            for (i in gr.indices) {
                 val on = i == tab
-                txt.textAlign = Paint.Align.CENTER; txt.textSize = 11 * d; txt.letterSpacing = 0.2f
+                txt.textAlign = Paint.Align.CENTER; txt.textSize = (if (gr.size > 4) 10 else 11) * d; txt.letterSpacing = if (gr.size > 4) 0.08f else 0.2f
                 txt.color = if (on) accent else dim
-                c.drawText(groups[i].first, 24 * d + tw * (i + 0.5f), 80 * d, txt)
+                c.drawText(gr[i].first, 24 * d + tw * (i + 0.5f), 80 * d, txt)
             }
             val target = 24 * d + tw * tab
             tabX += (target - tabX) * 0.35f
@@ -789,7 +853,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         }
 
         private fun setTab(t: Int) {
-            val nt = t.coerceIn(0, groups.size - 1)
+            val nt = t.coerceIn(0, gr.size - 1)
             if (nt == tab) return
             tab = nt; pos = 0f; lastDetent = 0
             performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -800,8 +864,13 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
 
         private fun send(it: Item) {
             performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-            val ok = it.tile?.let { t -> findAndClick(act.window.decorView, t) } ?: false
-            sent = if (ok) "▶ " + it.label + " SENT" else "NOT IN THIS VERSION"
+            val res = it.run
+            if (res != null) {
+                sent = try { "▶ " + res().take(46) } catch (e: Exception) { "FAILED: " + (e.message ?: "").take(30) }
+            } else {
+                val ok = it.tile?.let { t -> findAndClick(act.window.decorView, t) } ?: false
+                sent = if (ok) "▶ " + it.label + " SENT" else "NOT IN THIS VERSION"
+            }
             sentA = 1f
             invalidate()
         }
@@ -854,7 +923,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
                             val ty = e.y
                             if (ty < 100 * d) {
                                 if (ty < 55 * d && e.x > width - 90 * d) closeDeck()
-                                else { val tw = (width - 48 * d) / groups.size; setTab(((e.x - 24 * d) / tw).toInt()) }
+                                else { val tw = (width - 48 * d) / gr.size; setTab(((e.x - 24 * d) / tw).toInt()) }
                             } else if (downOnCenter) {
                                 if (!centerItem().risky) send(centerItem())
                             } else {
@@ -871,9 +940,129 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         }
     }
 
+    // ================================================================== INBOX (the notifications stored on the laptop)
+
+    private inner class InboxPanel(ctx: Context) : FrameLayout(ctx) {
+        private val d = resources.displayMetrics.density
+        private val all = ArrayList<org.json.JSONObject>()
+        private val shown = ArrayList<org.json.JSONObject>()
+        private var savedOnly = false
+        private val status = TextView(ctx)
+        private val tabAll = TextView(ctx)
+        private val tabSaved = TextView(ctx)
+        private val listV = android.widget.ListView(ctx)
+        private val mono = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+        private val fmt = java.text.SimpleDateFormat("dd MMM  HH:mm", Locale.getDefault())
+
+        private fun label(t: TextView, s: String, size: Float, col: Int) {
+            t.text = s; t.textSize = size; t.setTextColor(col); t.typeface = mono; t.letterSpacing = 0.15f
+        }
+
+        private val adapter = object : android.widget.BaseAdapter() {
+            override fun getCount() = shown.size
+            override fun getItem(i: Int) = shown[i]
+            override fun getItemId(i: Int) = i.toLong()
+            override fun getView(i: Int, old: View?, parent: ViewGroup?): View {
+                val e = shown[i]
+                val row = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding((20 * d).toInt(), (12 * d).toInt(), (8 * d).toInt(), (12 * d).toInt())
+                }
+                val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+                val ts = e.optDouble("ts", 0.0)
+                val top = TextView(context)
+                label(top, e.optString("app", "?").uppercase() + (if (ts > 0) "   " + fmt.format(java.util.Date((ts * 1000).toLong())) else ""), 10f, accent)
+                val title = TextView(context).apply {
+                    text = e.optString("title", ""); textSize = 16f; setTextColor(textMain)
+                    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); maxLines = 2
+                }
+                val body = TextView(context).apply {
+                    text = e.optString("text", ""); textSize = 13f; setTextColor(dim); maxLines = 4
+                }
+                col.addView(top); col.addView(title); col.addView(body)
+                row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
+                val saved = e.optBoolean("saved", false)
+                val star = TextView(context).apply {
+                    text = if (saved) "\u2605" else "\u2606"; textSize = 26f
+                    setTextColor(if (saved) warn else dim); gravity = Gravity.CENTER
+                    setPadding((14 * d).toInt(), 0, (14 * d).toInt(), 0)
+                    setOnClickListener { toggleSaved(e) }
+                }
+                row.addView(star, LinearLayout.LayoutParams(-2, -1))
+                val sep = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+                sep.addView(row)
+                sep.addView(View(context).apply { setBackgroundColor(edge) }, LinearLayout.LayoutParams(-1, 1))
+                return sep
+            }
+        }
+
+        init {
+            setBackgroundColor(bgc)
+            isClickable = true
+            val v = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; setPadding(0, (30 * d).toInt(), 0, 0) }
+            val head = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                setPadding((20 * d).toInt(), 0, (20 * d).toInt(), (6 * d).toInt()) }
+            val title = TextView(ctx); label(title, "\u25E2 LAPTOP INBOX", 12f, accent)
+            val refresh = TextView(ctx); label(refresh, "REFRESH", 10f, accent)
+            refresh.setPadding((10 * d).toInt(), (8 * d).toInt(), (10 * d).toInt(), (8 * d).toInt()); refresh.setOnClickListener { load() }
+            val close = TextView(ctx); label(close, "CLOSE \u2715", 10f, dim)
+            close.setPadding((10 * d).toInt(), (8 * d).toInt(), 0, (8 * d).toInt()); close.setOnClickListener { closeInbox() }
+            head.addView(title, LinearLayout.LayoutParams(0, -2, 1f)); head.addView(refresh); head.addView(close)
+            v.addView(head)
+            val tabs = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; setPadding((20 * d).toInt(), 0, (20 * d).toInt(), (4 * d).toInt()) }
+            tabAll.setOnClickListener { savedOnly = false; refilter() }
+            tabSaved.setOnClickListener { savedOnly = true; refilter() }
+            tabAll.setPadding(0, (8 * d).toInt(), (22 * d).toInt(), (8 * d).toInt())
+            tabSaved.setPadding(0, (8 * d).toInt(), 0, (8 * d).toInt())
+            tabs.addView(tabAll); tabs.addView(tabSaved)
+            v.addView(tabs)
+            label(status, "", 9f, dim); status.setPadding((20 * d).toInt(), 0, (20 * d).toInt(), (8 * d).toInt())
+            v.addView(status)
+            listV.divider = null; listV.adapter = adapter; listV.setBackgroundColor(Color.TRANSPARENT)
+            v.addView(listV, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(v, LayoutParams(-1, -1))
+            refilter()
+        }
+
+        private fun tabs() {
+            label(tabAll, "ALL", 12f, if (!savedOnly) accent else dim)
+            label(tabSaved, "SAVED \u2605", 12f, if (savedOnly) warn else dim)
+        }
+
+        private fun refilter() {
+            shown.clear()
+            for (e in all) if (!savedOnly || e.optBoolean("saved", false)) shown.add(e)
+            tabs(); adapter.notifyDataSetChanged()
+        }
+
+        fun load() {
+            label(status, "LOADING FROM THE LAPTOP...", 9f, dim)
+            Thread {
+                val r = LaptopApi.call(act, "GET", "/phone_notifications?limit=150", null, 6000)
+                act.runOnUiThread {
+                    val err = r.optString("error", "")
+                    if (err.isNotEmpty()) { label(status, err.uppercase(), 9f, warn); return@runOnUiThread }
+                    all.clear()
+                    val arr = r.optJSONArray("items")
+                    if (arr != null) for (i in 0 until arr.length()) all.add(arr.getJSONObject(i))
+                    label(status, r.optInt("total").toString() + " STORED  \u00B7  " + r.optInt("unread") + " UNREAD  \u00B7  " + r.optInt("saved") + " SAVED", 9f, dim)
+                    refilter()
+                }
+            }.start()
+        }
+
+        private fun toggleSaved(e: org.json.JSONObject) {
+            val now = !e.optBoolean("saved", false)
+            e.put("saved", now)
+            refilter()
+            val id = e.optInt("id", -1)
+            Thread { LaptopApi.call(act, "POST", "/phone_notifications/save", org.json.JSONObject().put("id", id).put("saved", now), 6000) }.start()
+        }
+    }
+
     companion object {
         private const val DIAL_STEP = 0.42f
-        private val BURST_ANG = intArrayOf(180, 218, 256, 284, 322, 360)
+        private val BURST_ANG = intArrayOf(215, 270, 325)
         private var instance: HoloHome? = null
 
         /** Call once after setContentView(). Returns true when the new Home was installed (needs the HUD Home page). */

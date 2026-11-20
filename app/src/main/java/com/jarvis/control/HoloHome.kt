@@ -80,15 +80,26 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
     private var inboxOpen = false
     private lateinit var inbox: InboxPanel
 
-    // the core opens exactly these three switches
+    // the core opens a circle: 3 switches, 3 laptop buttons, 3 apps
     private val burst = listOf(
-        Item("SERVER", "bolt", null), Item("MIC", "mic", null), Item("NOTIFY", "bell", null)
+        Item("SERVER", "bolt", null), Item("MIC", "mic", null), Item("NOTIFY", "bell", null),
+        Item("FIND LAPTOP", "radar", "FIND LAPTOP"), Item("REMOTE", "remote", "REMOTE"),
+        Item("SHARE SCREEN", "share", "SHARE SCREEN"),
+        Item("INSTAGRAM", "insta", null, false) { launchPkg("com.instagram.android", "INSTAGRAM") },
+        Item("CLAUDE", "claude", null, false) { launchPkg("com.anthropic.claude", "CLAUDE") },
+        Item("CHROME", "chrome", null, false) { launchPkg("com.android.chrome", "CHROME") }
     )
+
+    private fun launchPkg(pkg: String, name: String): String {
+        val i = act.packageManager.getLaunchIntentForPackage(pkg)
+        return if (i == null) "$name IS NOT INSTALLED" else {
+            try { act.startActivity(i); "OPENING $name" } catch (e: Exception) { "CAN'T OPEN $name" }
+        }
+    }
     private val dial = listOf(
         Item("PHONE DECK", "phone", null), Item("NOTIFICATIONS", "bell", null), Item("LAPTOP DECK", "laptop", null),
-        Item("FIND LAPTOP", "radar", "FIND LAPTOP"), Item("REMOTE", "remote", "REMOTE"),
-        Item("SHARE SCREEN", "share", "SHARE SCREEN"), Item("PASTE TO LAPTOP", "paste", "PASTE TO LAPTOP"),
-        Item("PAIR", "link", "PAIR"), Item("THEME", "theme", "THEME"), Item("SETUP", "sliders", "SETUP")
+        Item("PASTE TO LAPTOP", "paste", "PASTE TO LAPTOP"), Item("PAIR", "link", "PAIR"),
+        Item("THEME", "theme", "THEME"), Item("SETUP", "sliders", "SETUP")
     )
 
     private fun volDown(): String {
@@ -217,10 +228,26 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
 
     private fun updateBack() { backCb?.isEnabled = launcher || deckOpen || inboxOpen || stage.burstOpen }
 
+    // ---- "JARVIS - MADE BY NALIN" intro: once each time the phone is unlocked (and once when Jarvis starts) ----
+    private var introDue = true
+    private var introUntil = Long.MAX_VALUE
+
+    fun introArm() { introDue = true; introUntil = System.currentTimeMillis() + 45_000L; maybeIntro() }
+
+    private fun maybeIntro() {
+        if (!introDue || !launcher || !root.isShown || !stage.isAttachedToWindow) return
+        if (System.currentTimeMillis() > introUntil) { introDue = false; return }
+        introDue = false
+        val v = IntroView(act)
+        root.addView(v, FrameLayout.LayoutParams(-1, -1))
+        v.start()
+    }
+
     fun setLauncher(on: Boolean) {
         if (launcher == on) return
         launcher = on
         applyMode()
+        if (on) root.post { maybeIntro() }
     }
 
     fun openDeck(phone: Boolean = true) {
@@ -284,7 +311,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             "PHONE DECK" -> openDeck(true)
             "LAPTOP DECK" -> openDeck(false)
             "NOTIFICATIONS" -> openInbox()
-            else -> it.tile?.let { t ->
+            else -> if (it.run != null) stage.flash(it.run.invoke()) else it.tile?.let { t ->
                 press(t, "▶ " + it.label)
                 // these open a page of the normal app, so leave the launcher look
                 if (t == "PAIR" || t == "SETUP" || t == "LAPTOP STATUS") setLauncher(false)
@@ -368,7 +395,8 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         }
         private var acc = 0f
         abstract fun frame(dt: Float)
-        private fun sync() { if (isAttachedToWindow && isShown) { if (!anim.isRunning) { last = 0L; anim.start() } } else anim.cancel() }
+        open fun onShown() {}
+        private fun sync() { if (isAttachedToWindow && isShown) { if (!anim.isRunning) { last = 0L; anim.start() }; onShown() } else anim.cancel() }
         override fun onAttachedToWindow() { super.onAttachedToWindow(); sync() }
         override fun onDetachedFromWindow() { anim.cancel(); super.onDetachedFromWindow() }
         override fun onVisibilityChanged(changedView: View, visibility: Int) { super.onVisibilityChanged(changedView, visibility); sync() }
@@ -388,6 +416,72 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         Ico.draw(c, item.icon, cx, cy, r * 0.95f, ic)
     }
 
+    // ================================================================== BACKDROP (shared background)
+
+    private fun mix(a: Int, b: Int, t: Float): Int = Color.rgb(
+        (Color.red(a) + (Color.red(b) - Color.red(a)) * t).toInt(), (Color.green(a) + (Color.green(b) - Color.green(a)) * t).toInt(),
+        (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t).toInt())
+
+    /** Deep gradient, drifting colour clouds, a glowing floor grid, slow rings behind the orb and a dark vignette. */
+    private inner class Backdrop {
+        private val d = act.resources.displayMetrics.density
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val ln = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+        private var w = 0; private var h = 0
+        private var base: LinearGradient? = null
+        private var cloudA: RadialGradient? = null
+        private var cloudB: RadialGradient? = null
+        private var vignette: RadialGradient? = null
+        private var floorFade: LinearGradient? = null
+        private val violet = Color.rgb(70, 90, 255)
+
+        private fun build(nw: Int, nh: Int) {
+            w = nw; h = nh
+            base = LinearGradient(0f, 0f, 0f, h.toFloat(),
+                intArrayOf(mix(bgc, Color.BLACK, 0.35f), mix(bgc, accent, 0.10f), mix(bgc, Color.BLACK, 0.25f)), floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP)
+            val rA = w * 0.75f; val rB = w * 0.6f
+            cloudA = RadialGradient(0f, 0f, rA, faded(accent, 70), faded(accent, 0), Shader.TileMode.CLAMP)
+            cloudB = RadialGradient(0f, 0f, rB, faded(violet, 60), faded(violet, 0), Shader.TileMode.CLAMP)
+            vignette = RadialGradient(w / 2f, h * 0.45f, h * 0.78f, intArrayOf(0x00000000, 0x00000000, 0xC8000000.toInt()), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+            floorFade = LinearGradient(0f, h * 0.70f, 0f, h.toFloat(), faded(accent, 0), faded(accent, 70), Shader.TileMode.CLAMP)
+        }
+
+        fun draw(c: Canvas, nw: Int, nh: Int, t: Float, cx: Float, cy: Float, cr: Float, orb: Boolean) {
+            if (nw != w || nh != h || base == null) build(nw, nh)
+            val wf = w.toFloat(); val hf = h.toFloat()
+            p.shader = base; c.drawRect(0f, 0f, wf, hf, p)
+            // drifting colour clouds
+            p.shader = cloudA
+            c.save(); c.translate(wf * (0.25f + 0.12f * sin(t * 0.21f)), hf * (0.22f + 0.05f * cos(t * 0.17f))); c.drawCircle(0f, 0f, wf * 0.75f, p); c.restore()
+            p.shader = cloudB
+            c.save(); c.translate(wf * (0.78f + 0.10f * cos(t * 0.19f)), hf * (0.58f + 0.06f * sin(t * 0.23f))); c.drawCircle(0f, 0f, wf * 0.6f, p); c.restore()
+            p.shader = null
+            if (orb && cr > 0f) {
+                // slow rings behind the orb
+                ln.strokeWidth = 1f * d
+                ln.color = faded(accent, 34); ln.pathEffect = android.graphics.DashPathEffect(floatArrayOf(2 * d, 10 * d), t * 6f)
+                c.drawCircle(cx, cy, cr * 1.75f, ln)
+                ln.color = faded(accent, 22); ln.pathEffect = android.graphics.DashPathEffect(floatArrayOf(14 * d, 22 * d), -t * 9f)
+                c.drawCircle(cx, cy, cr * 2.25f, ln)
+                ln.pathEffect = null
+            }
+            // floor grid with perspective, glowing toward the bottom
+            val horizon = hf * 0.70f
+            ln.shader = floorFade; ln.strokeWidth = 1f * d
+            var k = -9
+            while (k <= 9) { c.drawLine(wf / 2f + k * wf * 0.11f * 0.18f, horizon, wf / 2f + k * wf * 0.11f * 1.9f, hf, ln); k++ }
+            var i = 0
+            val off = (t * 0.18f) % 1f
+            while (i < 9) {
+                val f = (i + off) / 9f
+                val y = horizon + (hf - horizon) * f * f
+                c.drawLine(0f, y, wf, y, ln); i++
+            }
+            ln.shader = null
+            p.shader = vignette; c.drawRect(0f, 0f, wf, hf, p); p.shader = null
+        }
+    }
+
     // ================================================================== STAGE (core, burst, dial)
 
     private inner class Stage(ctx: Context) : Ticking(ctx) {
@@ -399,6 +493,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         private val hfill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private val ic = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; strokeWidth = 1.7f * d }
         private val txt = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val backdrop = Backdrop()
         private val hexP = Path()
         private val oval = RectF()
         private var glow: RadialGradient? = null
@@ -492,21 +587,19 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             if (tick == 0f) readSwitches()
         }
 
+        override fun onShown() { maybeIntro() }
+
         fun flash(s: String) { toast = s; toastA = 1f }
 
         // ---- drawing
         override fun onDraw(c: Canvas) {
             val w = width.toFloat(); val h = height.toFloat()
             if (cr <= 0f) return
-            // grid + drifting particles
             fill.shader = null
-            line.color = faded(accent, 14); line.strokeWidth = 1f
-            val g = 38 * d
-            var gy = g; while (gy < h) { c.drawLine(0f, gy, w, gy, line); gy += g }
-            var gx = g; while (gx < w) { c.drawLine(gx, 0f, gx, h, line); gx += g }
+            backdrop.draw(c, width, height, pulse, cx, cy, cr, true)
             for (i in px.indices) {
-                fill.color = faded(accent, (40 + 90 * (0.5f + 0.5f * sin(pulse + i))).toInt())
-                c.drawCircle(px[i] * w, py[i] * h, ps[i] * d, fill)
+                fill.color = faded(Color.WHITE, (30 + 110 * (0.5f + 0.5f * sin(pulse * 1.4f + i * 1.7f))).toInt())
+                c.drawCircle(px[i] * w, py[i] * h, ps[i] * d * 0.8f, fill)
             }
             val calm = 1f - burstP
 
@@ -603,9 +696,10 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         }
 
         private fun burstPos(i: Int, p: Float): FloatArray {
-            val ang = Math.toRadians((BURST_ANG[i]).toDouble())
-            val rr = (cr + 66 * d) * p
-            return floatArrayOf((cx + rr * cos(ang)).toFloat(), (cy + rr * sin(ang)).toFloat())
+            // nine buttons spread evenly on one circle around the orb (a little wider than tall)
+            val ang = Math.toRadians((-130.0 + 40.0 * i))
+            val rx = min(width * 0.385f, cr + 70 * d); val ry = cr + 66 * d
+            return floatArrayOf((cx + rx * p * cos(ang)).toFloat(), (cy + ry * p * sin(ang)).toFloat())
         }
 
         private fun drawBurst(c: Canvas) {
@@ -616,20 +710,23 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             val states = booleanArrayOf(sv, mc, nt)
             for (i in burst.indices) {
                 val pt = burstPos(i, p)
-                val col = if (states[i]) okCol else warn
+                val sw = i < 3
+                val col = if (!sw) accent else if (states[i]) okCol else warn
                 line.color = faded(col, (110 * p).toInt()); line.strokeWidth = 1.2f * d
                 c.drawLine(cx, cy, pt[0], pt[1], line)
-                val r = 32 * d * (0.4f + 0.6f * p)
+                val r = (if (sw) 28 else 24) * d * (0.4f + 0.6f * p)
                 hex(hexP, pt[0], pt[1], r)
-                hfill.color = faded(col, (if (states[i]) 70 else 40) * (255 * p).toInt() / 255); c.drawPath(hexP, hfill)
+                hfill.color = faded(col, (if (!sw || states[i]) 70 else 40) * (255 * p).toInt() / 255); c.drawPath(hexP, hfill)
                 line.color = faded(col, (255 * p).toInt().coerceIn(0, 255)); line.strokeWidth = 2f * d; c.drawPath(hexP, line)
                 ic.color = faded(col, (255 * p).toInt().coerceIn(0, 255))
                 Ico.draw(c, burst[i].icon, pt[0], pt[1], r * 0.95f, ic)
-                txt.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); txt.textSize = 9 * d; txt.letterSpacing = 0.15f
+                txt.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); txt.textSize = (if (sw) 9 else 8) * d; txt.letterSpacing = if (sw) 0.15f else 0.06f
                 txt.textAlign = Paint.Align.CENTER; txt.color = faded(textMain, (230 * p).toInt())
                 c.drawText(burst[i].label, pt[0], pt[1] + r + 14 * d, txt)
-                txt.textSize = 13 * d; txt.color = faded(col, (255 * p).toInt().coerceIn(0, 255))
-                c.drawText(if (states[i]) "ON" else "OFF", pt[0], pt[1] + r + 30 * d, txt)
+                if (sw) {
+                    txt.textSize = 13 * d; txt.color = faded(col, (255 * p).toInt().coerceIn(0, 255))
+                    c.drawText(if (states[i]) "ON" else "OFF", pt[0], pt[1] + r + 30 * d, txt)
+                }
             }
         }
 
@@ -756,7 +853,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             if (burstOpen) {
                 for (i in burst.indices) {
                     val pt = burstPos(i, 1f)
-                    if (hypot(x - pt[0], y - pt[1]) < 38 * d) { performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); when (i) { 0 -> toggleServer(); 1 -> toggleMic(); else -> toggleNotif() }; return }
+                    if (hypot(x - pt[0], y - pt[1]) < 38 * d) { performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); when (i) { 0 -> toggleServer(); 1 -> toggleMic(); 2 -> toggleNotif(); else -> { closeBurst(); fire(burst[i]) } }; return }
                 }
                 closeBurst(); return
             }
@@ -798,6 +895,8 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         private var posAnim: ValueAnimator? = null
         private var lastDetent = 0
         private var scan = 0f
+        private val deckBackdrop = Backdrop()
+        private var deckT = 0f
         private var holdP = 0f
         private var holdAnim: ValueAnimator? = null
         private var x0 = 0f; private var y0 = 0f; private var mode = 0; private var pos0 = 0f
@@ -814,6 +913,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
 
         override fun frame(dt: Float) {
             scan = (scan + dt * 0.5f) % 1f
+            deckT += dt * 2.2f
             if (sentA > 0f) sentA = (sentA - dt * 0.7f).coerceAtLeast(0f)
         }
 
@@ -823,11 +923,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         override fun onDraw(c: Canvas) {
             val w = width.toFloat(); val h = height.toFloat()
             fill.shader = null
-            fill.color = bgc; c.drawRect(0f, 0f, w, h, fill)
-            line.color = faded(accent, 14); line.strokeWidth = 1f
-            val g = 38 * d
-            var gy = g; while (gy < h) { c.drawLine(0f, gy, w, gy, line); gy += g }
-            var gx = g; while (gx < w) { c.drawLine(gx, 0f, gx, h, line); gx += g }
+            deckBackdrop.draw(c, width, height, deckT, w / 2f, h * 0.56f, 0f, false)
             // scan line
             fill.shader = LinearGradient(0f, scan * h - 30 * d, 0f, scan * h + 30 * d, intArrayOf(faded(accent, 0), faded(accent, 38), faded(accent, 0)), null, Shader.TileMode.CLAMP)
             c.drawRect(0f, scan * h - 30 * d, w, scan * h + 30 * d, fill); fill.shader = null
@@ -1074,7 +1170,9 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         }
 
         init {
-            setBackgroundColor(bgc)
+            background = android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(mix(bgc, Color.BLACK, 0.35f), mix(bgc, accent, 0.10f), mix(bgc, Color.BLACK, 0.25f)))
             isClickable = true
             val v = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; setPadding(0, (30 * d).toInt(), 0, 0) }
             val head = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
@@ -1141,6 +1239,22 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         private const val DIAL_STEP = 0.42f
         private val BURST_ANG = intArrayOf(215, 270, 325)
         private var instance: HoloHome? = null
+        private var rcv: android.content.BroadcastReceiver? = null
+
+        private fun watchUnlock(app: android.content.Context) {
+            if (rcv != null) return
+            val r = object : android.content.BroadcastReceiver() {
+                override fun onReceive(c: android.content.Context, i: android.content.Intent) {
+                    if (i.action == android.content.Intent.ACTION_USER_PRESENT) instance?.introArm()
+                }
+            }
+            val f = android.content.IntentFilter(android.content.Intent.ACTION_USER_PRESENT)
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 33) app.registerReceiver(r, f, android.content.Context.RECEIVER_NOT_EXPORTED)
+                else app.registerReceiver(r, f)
+                rcv = r
+            } catch (e: Exception) { }
+        }
 
         /** Call once after setContentView(). Returns true when the new Home was installed (needs the HUD Home page). */
         @JvmStatic
@@ -1154,7 +1268,9 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             val h = HoloHome(act, page)
             h.build()
             h.setLauncher(if (keep) was else isHomeIntent(act.intent))
+            if (!h.launcher) h.introDue = false
             instance = h
+            watchUnlock(act.applicationContext)
             AppDrawer.hideHandle(act)
             return true
         }

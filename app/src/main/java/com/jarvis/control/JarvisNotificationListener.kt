@@ -40,7 +40,6 @@ class JarvisNotificationListener : NotificationListenerService() {
             CallAssistService.waPosted(sbn)
         }
         val p = prefs()
-        if (!p.getBoolean("notif_forward_enabled", false)) return
 
         // never mirror our own app's notifications (the foreground-service status bar entry) — avoids a loop
         if (sbn.packageName == packageName) return
@@ -60,6 +59,15 @@ class JarvisNotificationListener : NotificationListenerService() {
         } catch (e: Exception) {
             sbn.packageName
         }
+
+        // Keep every notification on the phone itself (no laptop needed). Ongoing ones (music player,
+        // downloads, "service running") are not "pop-ups", so they are left out.
+        if ((sbn.notification.flags and Notification.FLAG_ONGOING_EVENT) == 0) {
+            try { NotifStore.add(applicationContext, sbn.packageName, appName, title, text, sbn.postTime) } catch (e: Exception) { }
+        }
+
+        // sending to the laptop is the separate NOTIFY switch
+        if (!p.getBoolean("notif_forward_enabled", false)) return
 
         val ip = p.getString("laptop_ip", "")?.trim().orEmpty()
         val port = p.getString("laptop_port", "8899")?.trim()?.ifEmpty { "8899" } ?: "8899"
@@ -117,9 +125,26 @@ class JarvisNotificationListener : NotificationListenerService() {
         }
     }
 
+    /** When access is (re)connected, also save what is already showing in the shade. */
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        try {
+            for (sbn in activeNotifications ?: emptyArray()) {
+                if (sbn.packageName == packageName) continue
+                val n = sbn.notification
+                if ((n.flags and Notification.FLAG_GROUP_SUMMARY) != 0 || (n.flags and Notification.FLAG_ONGOING_EVENT) != 0) continue
+                val title = n.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+                val text = n.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty()
+                if (title.isBlank() && text.isBlank()) continue
+                val app = try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(sbn.packageName, 0)).toString() } catch (e: Exception) { sbn.packageName }
+                NotifStore.add(applicationContext, sbn.packageName, app, title, text, sbn.postTime)
+            }
+        } catch (e: Exception) { }
+    }
+
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
         if (isWhatsApp(sbn.packageName)) CallAssistService.waRemoved(sbn.key)
         // intentionally not mirrored: dismissing a notification on the phone must NOT remove it
-        // from Jarvis. The laptop keeps its own permanent archive.
+        // from Jarvis. The phone (NotifStore) and the laptop each keep their own permanent archive.
     }
 }

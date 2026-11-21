@@ -531,13 +531,14 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
                     else -> "ONLINE"
                 }
             } catch (e: Exception) { }
+            try { unread = NotifStore.unread(act) } catch (e: Exception) { }
             val now = System.currentTimeMillis()
             if (now - lastPoll > 45_000L) {
                 lastPoll = now
                 Thread {
-                    if (!LaptopApi.paired(act)) { lap = -1; unread = -1 } else {
+                    if (!LaptopApi.paired(act)) { lap = -1 } else {
                         val r = LaptopApi.call(act, "GET", "/phone_notifications?limit=1", null, 3000)
-                        if (r.has("error")) { lap = 0 } else { lap = 1; unread = r.optInt("unread", 0) }
+                        lap = if (r.has("error")) 0 else 1
                     }
                 }.start()
             }
@@ -1113,12 +1114,11 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         }
     }
 
-    // ================================================================== INBOX (the notifications stored on the laptop)
+    // ================================================================== INBOX (every notification that popped up on this phone)
 
     private inner class InboxPanel(ctx: Context) : FrameLayout(ctx) {
         private val d = resources.displayMetrics.density
-        private val all = ArrayList<org.json.JSONObject>()
-        private val shown = ArrayList<org.json.JSONObject>()
+        private val shown = ArrayList<NotifStore.Row>()
         private var savedOnly = false
         private val status = TextView(ctx)
         private val tabAll = TextView(ctx)
@@ -1126,46 +1126,80 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         private val listV = android.widget.ListView(ctx)
         private val mono = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
         private val fmt = java.text.SimpleDateFormat("dd MMM  HH:mm", Locale.getDefault())
+        private val slop = ViewConfiguration.get(ctx).scaledTouchSlop
 
         private fun label(t: TextView, s: String, size: Float, col: Int) {
             t.text = s; t.textSize = size; t.setTextColor(col); t.typeface = mono; t.letterSpacing = 0.15f
         }
 
+        private fun accessGranted(): Boolean =
+            (android.provider.Settings.Secure.getString(act.contentResolver, "enabled_notification_listeners") ?: "").contains(act.packageName)
+
         private val adapter = object : android.widget.BaseAdapter() {
             override fun getCount() = shown.size
             override fun getItem(i: Int) = shown[i]
-            override fun getItemId(i: Int) = i.toLong()
+            override fun getItemId(i: Int) = shown[i].id
             override fun getView(i: Int, old: View?, parent: ViewGroup?): View {
                 val e = shown[i]
                 val row = LinearLayout(context).apply {
                     orientation = LinearLayout.HORIZONTAL
                     setPadding((20 * d).toInt(), (12 * d).toInt(), (8 * d).toInt(), (12 * d).toInt())
+                    setBackgroundColor(mix(bgc, accent, 0.06f))
                 }
                 val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-                val ts = e.optDouble("ts", 0.0)
                 val top = TextView(context)
-                label(top, e.optString("app", "?").uppercase() + (if (ts > 0) "   " + fmt.format(java.util.Date((ts * 1000).toLong())) else ""), 10f, accent)
+                label(top, e.app.uppercase() + "   " + fmt.format(java.util.Date(e.ts)), 10f, if (e.read) dim else accent)
                 val title = TextView(context).apply {
-                    text = e.optString("title", ""); textSize = 16f; setTextColor(textMain)
+                    text = e.title; textSize = 16f; setTextColor(textMain)
                     typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); maxLines = 2
                 }
-                val body = TextView(context).apply {
-                    text = e.optString("text", ""); textSize = 13f; setTextColor(dim); maxLines = 4
-                }
+                val body = TextView(context).apply { text = e.text; textSize = 13f; setTextColor(dim); maxLines = 4 }
                 col.addView(top); col.addView(title); col.addView(body)
                 row.addView(col, LinearLayout.LayoutParams(0, -2, 1f))
-                val saved = e.optBoolean("saved", false)
                 val star = TextView(context).apply {
-                    text = if (saved) "\u2605" else "\u2606"; textSize = 26f
-                    setTextColor(if (saved) warn else dim); gravity = Gravity.CENTER
+                    text = if (e.saved) "\u2605" else "\u2606"; textSize = 26f
+                    setTextColor(if (e.saved) warn else dim); gravity = Gravity.CENTER
                     setPadding((14 * d).toInt(), 0, (14 * d).toInt(), 0)
-                    setOnClickListener { toggleSaved(e) }
+                    setOnClickListener { NotifStore.setSaved(act, e.id, !e.saved); reload() }
                 }
                 row.addView(star, LinearLayout.LayoutParams(-2, -1))
-                val sep = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-                sep.addView(row)
-                sep.addView(View(context).apply { setBackgroundColor(edge) }, LinearLayout.LayoutParams(-1, 1))
-                return sep
+                swipeToDelete(row, e)
+                val wrap = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+                wrap.addView(row)
+                wrap.addView(View(context).apply { setBackgroundColor(edge) }, LinearLayout.LayoutParams(-1, 1))
+                return wrap
+            }
+        }
+
+        /** Swipe a row left or right to remove it. A short tap opens the app that sent it. */
+        private fun swipeToDelete(row: View, e: NotifStore.Row) {
+            var x0 = 0f; var y0 = 0f; var drag = false
+            row.setOnTouchListener { v, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> { x0 = ev.rawX; y0 = ev.rawY; drag = false; true }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = ev.rawX - x0; val dy = ev.rawY - y0
+                        if (!drag && abs(dx) > slop && abs(dx) > abs(dy) * 1.5f) { drag = true; listV.requestDisallowInterceptTouchEvent(true) }
+                        if (drag) { v.translationX = dx; v.alpha = (1f - abs(dx) / (v.width * 0.9f)).coerceIn(0.15f, 1f) }
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        val dx = ev.rawX - x0
+                        if (drag && abs(dx) > v.width * 0.33f) {
+                            v.animate().translationX(if (dx > 0) v.width.toFloat() else -v.width.toFloat()).alpha(0f).setDuration(160).withEndAction {
+                                NotifStore.delete(act, e.id); reload()
+                            }.start()
+                        } else if (drag) {
+                            v.animate().translationX(0f).alpha(1f).setDuration(160).start()
+                        } else {
+                            val i = act.packageManager.getLaunchIntentForPackage(e.pkg)
+                            if (i != null) try { act.startActivity(i) } catch (ex: Exception) { }
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_CANCEL -> { v.animate().translationX(0f).alpha(1f).setDuration(160).start(); true }
+                    else -> true
+                }
             }
         }
 
@@ -1177,16 +1211,16 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             val v = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; setPadding(0, (30 * d).toInt(), 0, 0) }
             val head = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 setPadding((20 * d).toInt(), 0, (20 * d).toInt(), (6 * d).toInt()) }
-            val title = TextView(ctx); label(title, "\u25E2 LAPTOP INBOX", 12f, accent)
-            val refresh = TextView(ctx); label(refresh, "REFRESH", 10f, accent)
-            refresh.setPadding((10 * d).toInt(), (8 * d).toInt(), (10 * d).toInt(), (8 * d).toInt()); refresh.setOnClickListener { load() }
+            val title = TextView(ctx); label(title, "\u25E2 NOTIFICATIONS", 12f, accent)
+            val clear = TextView(ctx); label(clear, "CLEAR ALL", 10f, warn)
+            clear.setPadding((10 * d).toInt(), (8 * d).toInt(), (10 * d).toInt(), (8 * d).toInt()); clear.setOnClickListener { confirmClear() }
             val close = TextView(ctx); label(close, "CLOSE \u2715", 10f, dim)
             close.setPadding((10 * d).toInt(), (8 * d).toInt(), 0, (8 * d).toInt()); close.setOnClickListener { closeInbox() }
-            head.addView(title, LinearLayout.LayoutParams(0, -2, 1f)); head.addView(refresh); head.addView(close)
+            head.addView(title, LinearLayout.LayoutParams(0, -2, 1f)); head.addView(clear); head.addView(close)
             v.addView(head)
             val tabs = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; setPadding((20 * d).toInt(), 0, (20 * d).toInt(), (4 * d).toInt()) }
-            tabAll.setOnClickListener { savedOnly = false; refilter() }
-            tabSaved.setOnClickListener { savedOnly = true; refilter() }
+            tabAll.setOnClickListener { savedOnly = false; reload() }
+            tabSaved.setOnClickListener { savedOnly = true; reload() }
             tabAll.setPadding(0, (8 * d).toInt(), (22 * d).toInt(), (8 * d).toInt())
             tabSaved.setPadding(0, (8 * d).toInt(), 0, (8 * d).toInt())
             tabs.addView(tabAll); tabs.addView(tabSaved)
@@ -1196,42 +1230,39 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             listV.divider = null; listV.adapter = adapter; listV.setBackgroundColor(Color.TRANSPARENT)
             v.addView(listV, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(v, LayoutParams(-1, -1))
-            refilter()
+            reload()
         }
 
-        private fun tabs() {
+        private fun confirmClear() {
+            android.app.AlertDialog.Builder(act)
+                .setMessage("Remove all notifications from this list? Starred ones stay.")
+                .setPositiveButton("Clear all") { _, _ -> NotifStore.clearAll(act); reload() }
+                .setNegativeButton("No", null).show()
+        }
+
+        fun reload() {
             label(tabAll, "ALL", 12f, if (!savedOnly) accent else dim)
-            label(tabSaved, "SAVED \u2605", 12f, if (savedOnly) warn else dim)
-        }
-
-        private fun refilter() {
-            shown.clear()
-            for (e in all) if (!savedOnly || e.optBoolean("saved", false)) shown.add(e)
-            tabs(); adapter.notifyDataSetChanged()
-        }
-
-        fun load() {
-            label(status, "LOADING FROM THE LAPTOP...", 9f, dim)
+            label(tabSaved, "STARRED \u2605", 12f, if (savedOnly) warn else dim)
             Thread {
-                val r = LaptopApi.call(act, "GET", "/phone_notifications?limit=150", null, 6000)
+                val rows = NotifStore.list(act, savedOnly)
+                val c = NotifStore.counts(act)
                 act.runOnUiThread {
-                    val err = r.optString("error", "")
-                    if (err.isNotEmpty()) { label(status, err.uppercase(), 9f, warn); return@runOnUiThread }
-                    all.clear()
-                    val arr = r.optJSONArray("items")
-                    if (arr != null) for (i in 0 until arr.length()) all.add(arr.getJSONObject(i))
-                    label(status, r.optInt("total").toString() + " STORED  \u00B7  " + r.optInt("unread") + " UNREAD  \u00B7  " + r.optInt("saved") + " SAVED", 9f, dim)
-                    refilter()
+                    shown.clear(); shown.addAll(rows); adapter.notifyDataSetChanged()
+                    if (!accessGranted()) {
+                        label(status, "TAP HERE: ALLOW NOTIFICATION ACCESS SO JARVIS CAN KEEP THEM", 9f, warn)
+                        status.setOnClickListener { act.startActivity(android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+                    } else {
+                        label(status, c[0].toString() + " SAVED ON THIS PHONE  \u00B7  " + c[1] + " NEW  \u00B7  " + c[2] + " STARRED  \u00B7  SWIPE TO REMOVE", 9f, dim)
+                        status.setOnClickListener(null); status.isClickable = false
+                    }
                 }
             }.start()
         }
 
-        private fun toggleSaved(e: org.json.JSONObject) {
-            val now = !e.optBoolean("saved", false)
-            e.put("saved", now)
-            refilter()
-            val id = e.optInt("id", -1)
-            Thread { LaptopApi.call(act, "POST", "/phone_notifications/save", org.json.JSONObject().put("id", id).put("saved", now), 6000) }.start()
+        /** Called when the panel opens: show the list and mark everything as seen. */
+        fun load() {
+            reload()
+            Thread { NotifStore.markAllRead(act); stage.readSwitches() }.start()
         }
     }
 

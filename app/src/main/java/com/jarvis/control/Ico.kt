@@ -8,6 +8,7 @@ import android.graphics.RectF
 /** Line icons drawn with paths (no pictures, no emoji). 24 x 24 grid. Generated from a tiny shape list. */
 object Ico {
     private val defs = mapOf(
+        "game" to "R2 7 20 11 5;P7 10 7 15;P4.5 12.5 9.5 12.5;O16 11 1.1;O18.6 13.8 1.1",
         "bolt" to "Q13 2 5 13 11 13 10 22 19 10 13 10",
         "stop" to "R6 6 12 12 2",
         "radar" to "O12 12 9;O12 12 5;P12 12 18.5 5.5;O12 12 1",

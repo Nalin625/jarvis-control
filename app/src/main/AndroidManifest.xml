@@ -83,6 +83,13 @@
         </activity>
 
         <activity
+            android:name=".GamesActivity"
+            android:exported="false"
+            android:label="Arcade"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.JarvisControl" />
+
+        <activity
             android:name=".ShareReceiverActivity"
             android:exported="true"
             android:label="Send to Jarvis"

@@ -35,6 +35,10 @@ class MicService : Service() {
         @Volatile var listening = false      // "always listen for the wake word"
         @Volatile var paused = false         // paused while the startup-voice recorder owns the mic
         @Volatile private var instance: MicService? = null
+        /** Where the next spoken sentence goes: "laptop" or "mobile". */
+        @Volatile var onceTarget = "laptop"
+        /** The screen listens here to show what was heard and what happened. */
+        @Volatile var live: ((String) -> Unit)? = null
 
         fun hasPermission(ctx: Context): Boolean =
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -61,6 +65,12 @@ class MicService : Service() {
         fun listenOnce(ctx: Context) {
             if (!alive) start(ctx)
             instance?.requestOnce()
+        }
+
+        /** Hold-the-mic: listen for ONE sentence and send it to "laptop" or "mobile". */
+        fun listenOnceFor(ctx: Context, target: String) {
+            onceTarget = target
+            listenOnce(ctx)
         }
 
         fun pauseMic(p: Boolean) {
@@ -137,6 +147,7 @@ class MicService : Service() {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
         }
@@ -196,7 +207,7 @@ class MicService : Service() {
         val low = text.lowercase()
         if (once) {
             once = false
-            send(text)
+            route(onceTarget, text)
             return
         }
         val wake = getSharedPreferences("jarvis_control", MODE_PRIVATE).getString("wake_word", "jarvis") ?: "jarvis"
@@ -207,13 +218,40 @@ class MicService : Service() {
                 awaitUntil = System.currentTimeMillis() + 8000   // "jarvis" alone: the next sentence is the command
                 setNote("Yes? Say your command...")
             } else {
-                send(cmd)
+                routeSpoken(cmd)
             }
         } else if (System.currentTimeMillis() < awaitUntil) {
             awaitUntil = 0L
-            send(text)
+            routeSpoken(text)
         }
         // anything else is background talk: ignored, never sent anywhere
+    }
+
+    /** "phone/mobile ..." goes to the phone, "laptop/computer ..." to the laptop, anything else to the chosen default. */
+    private fun routeSpoken(text: String) {
+        val phone = Regex("^(?:on |in |my |to )?(?:the )?(?:this )?(?:phone|mobile|mobile phone)[, :]+(.+)$", RegexOption.IGNORE_CASE).find(text)
+        val lap = Regex("^(?:on |in |my |to )?(?:the )?(?:laptop|computer|pc)[, :]+(.+)$", RegexOption.IGNORE_CASE).find(text)
+        when {
+            phone != null -> route("mobile", phone.groupValues[1])
+            lap != null -> route("laptop", lap.groupValues[1])
+            else -> route(getSharedPreferences("jarvis_control", MODE_PRIVATE).getString("mic_default_target", "laptop") ?: "laptop", text)
+        }
+    }
+
+    private fun route(target: String, text: String) {
+        live?.invoke("HEARD: ${text.take(40)}")
+        if (target == "mobile") {
+            setNote("Phone: $text")
+            val app = applicationContext
+            Thread {
+                val reply = try { MobileAssistant.handle(app, text) } catch (e: Exception) { "That failed." }
+                setNote(reply.take(80))
+                live?.invoke("PHONE: " + reply.take(60))
+            }.start()
+        } else {
+            live?.invoke("LAPTOP: ${text.take(46)}")
+            send(text)
+        }
     }
 
     private fun send(cmd: String) {
@@ -230,7 +268,10 @@ class MicService : Service() {
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
         override fun onEndOfSpeech() {}
-        override fun onPartialResults(partialResults: Bundle?) {}
+        override fun onPartialResults(partialResults: Bundle?) {
+            val t = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+            if (once && !t.isNullOrBlank()) live?.invoke("HEARING: " + t.take(40))
+        }
         override fun onEvent(eventType: Int, params: Bundle?) {}
 
         override fun onError(error: Int) {

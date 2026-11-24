@@ -3,6 +3,7 @@ package com.jarvis.control
 import android.animation.ValueAnimator
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -90,6 +91,16 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         Item("CHROME", "chrome", null, false) { launchPkg("com.android.chrome", "CHROME") }
     )
 
+    private fun openIntent(action: String, name: String): String =
+        try { act.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); "OPENING $name" } catch (e: Exception) { "CAN'T OPEN $name" }
+
+    private fun openGame(id: String?): String {
+        val i = Intent(act, GamesActivity::class.java)
+        if (id != null) i.putExtra("game", id)
+        act.startActivity(i)
+        return "ARCADE"
+    }
+
     private fun launchPkg(pkg: String, name: String): String {
         val i = act.packageManager.getLaunchIntentForPackage(pkg)
         return if (i == null) "$name IS NOT INSTALLED" else {
@@ -99,7 +110,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
     private val dial = listOf(
         Item("PHONE DECK", "phone", null), Item("NOTIFICATIONS", "bell", null), Item("LAPTOP DECK", "laptop", null),
         Item("PASTE TO LAPTOP", "paste", "PASTE TO LAPTOP"), Item("PAIR", "link", "PAIR"),
-        Item("THEME", "theme", "THEME"), Item("SETUP", "sliders", "SETUP")
+        Item("ARCADE", "game", null), Item("THEME", "theme", "THEME"), Item("SETUP", "sliders", "SETUP")
     )
 
     private fun volDown(): String {
@@ -143,6 +154,23 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             Item("BUZZ", "buzz", null, false) { PhoneTools.buzz(act).uppercase() },
             Item("HEARTBEAT", "heart", null, false) { PhoneTools2.heartbeat(act).uppercase() },
             Item("LAST CALL", "phone", null, false) { PhoneTools.lastCall(act).take(60).uppercase() }),
+        "GAMES" to listOf(
+            Item("ARCADE", "game", null, false) { openGame(null) },
+            Item("SNAKE", "game", null, false) { openGame("snake") },
+            Item("2048", "apps", null, false) { openGame("2048") },
+            Item("TIC-TAC-TOE", "x", null, false) { openGame("tictac") },
+            Item("MEMORY", "eye", null, false) { openGame("memory") },
+            Item("REACTION", "bolt", null, false) { openGame("reaction") },
+            Item("TAP RUSH", "radar", null, false) { openGame("rush") }),
+        "MORE" to listOf(
+            Item("SETTINGS", "sliders", null, false) { openIntent(android.provider.Settings.ACTION_SETTINGS, "SETTINGS") },
+            Item("SPOTIFY", "music", null, false) { launchPkg("com.spotify.music", "SPOTIFY") },
+            Item("TELEGRAM", "chat", null, false) { launchPkg("org.telegram.messenger", "TELEGRAM") },
+            Item("PLAY STORE", "apps", null, false) { launchPkg("com.android.vending", "PLAY STORE") },
+            Item("FILES", "disk", null, false) { launchPkg("com.google.android.apps.nbu.files", "FILES") },
+            Item("PHOTOS", "image", null, false) { launchPkg("com.google.android.apps.photos", "PHOTOS") },
+            Item("DRIVE", "cloud", null, false) { launchPkg("com.google.android.apps.docs", "DRIVE") },
+            Item("TRANSLATE", "globe", null, false) { launchPkg("com.google.android.apps.translate", "TRANSLATE") }),
         "OPEN" to listOf(
             Item("CAMERA", "camera", null, false) { PhoneTools.openCamera(act).uppercase() },
             Item("CLOCK", "clock", null, false) { PhoneTools2.openClock(act).uppercase() },
@@ -311,6 +339,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             "PHONE DECK" -> openDeck(true)
             "LAPTOP DECK" -> openDeck(false)
             "NOTIFICATIONS" -> openInbox()
+            "ARCADE" -> openGame(null)
             else -> if (it.run != null) stage.flash(it.run.invoke()) else it.tile?.let { t ->
                 press(t, "▶ " + it.label)
                 // these open a page of the normal app, so leave the launcher look
@@ -352,6 +381,15 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         if (prefs.getBoolean("wake_listen", false)) { MicService.setListening(act, false); say("MIC OFF") }
         else { MicService.start(act); MicService.setListening(act, true); say("LISTENING FOR THE WAKE WORD") }
         stage.readSwitches(); stage.invalidate()
+    }
+
+    /** Hold-the-mic result: 1 = laptop, 2 = mobile. Listens for one sentence and sends it to that side. */
+    private fun holdMic(side: Int) {
+        val target = if (side == 1) "laptop" else "mobile"
+        if (target == "laptop" && !LaptopApi.paired(act)) { say("PAIR THE LAPTOP FIRST"); return }
+        MicService.live = { msg -> ui.post { say(msg) } }
+        MicService.listenOnceFor(act, target)
+        say("LISTENING \u00B7 " + target.uppercase())
     }
 
     private fun toggleNotif() {
@@ -549,6 +587,10 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         private var posAnim: ValueAnimator? = null
         private var lastDetent = 0
         private var toast = ""; private var toastA = 0f
+        // hold the mic: the screen splits into LAPTOP | MOBILE, slide to one and let go to speak
+        private var holdOn = false; private var holdSide = 0; private var holdFade = 0f
+        private var holdX = 0f; private var holdY = 0f; private var downMic = false
+        private val holdRun = Runnable { beginHoldMic() }
 
         // touch
         private var x0 = 0f; private var y0 = 0f; private var mode = 0   // 0 none, 1 dial drag, 2 vertical
@@ -585,6 +627,8 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
                 dateText = String.format(Locale.getDefault(), "%1\$tA  %1\$td %1\$tb", cal).uppercase(Locale.getDefault())
             }
             if (toastA > 0f) toastA = (toastA - dt * 0.7f).coerceAtLeast(0f)
+            holdFade += ((if (holdOn) 1f else 0f) - holdFade) * (dt * 12f).coerceAtMost(1f)
+            if (holdFade < 0.01f && !holdOn) holdFade = 0f
             if (tick == 0f) readSwitches()
         }
 
@@ -630,7 +674,66 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
                 txt.textSize = 12 * d; txt.letterSpacing = 0.2f; txt.color = faded(accent, (255 * toastA).toInt())
                 c.drawText(toast, cx, cy + cr + 30 * d, txt)
             }
+            if (holdFade > 0.01f) drawHoldMic(c)
         }
+
+        private fun drawHoldMic(c: Canvas) {
+            val a = holdFade; val w = width.toFloat(); val h = height.toFloat(); val mid = w / 2f
+            hfill.color = faded(Color.BLACK, (215 * a).toInt()); c.drawRect(0f, 0f, w, h, hfill)
+            for (side in 1..2) {
+                val l = if (side == 1) 0f else mid; val r = if (side == 1) mid else w
+                val on = holdSide == side
+                hfill.color = faded(accent, ((if (on) 75 else 12) * a).toInt()); c.drawRect(l, 0f, r, h, hfill)
+                val mx = (l + r) / 2f; val my = h * 0.40f
+                stroke.shader = null
+                stroke.color = faded(accent, ((if (on) 255 else 110) * a).toInt()); stroke.strokeWidth = (if (on) 3f else 1.5f) * d
+                c.drawCircle(mx, my, (if (on) 64f else 52f) * d, stroke)
+                ic.color = faded(if (on) Color.WHITE else accent, (255 * a).toInt())
+                Ico.draw(c, if (side == 1) "laptop" else "phone", mx, my, (if (on) 34f else 28f) * d, ic)
+                txt.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); txt.textAlign = Paint.Align.CENTER
+                txt.textSize = 15 * d; txt.letterSpacing = 0.25f
+                txt.color = faded(if (on) Color.WHITE else dim, (255 * a).toInt())
+                c.drawText(if (side == 1) "LAPTOP" else "MOBILE", mx, my + 100 * d, txt)
+                txt.textSize = 9 * d; txt.letterSpacing = 0.15f; txt.color = faded(dim, (220 * a).toInt())
+                c.drawText(if (side == 1) "controls the laptop" else "the phone assistant", mx, my + 120 * d, txt)
+            }
+            line.color = faded(edge, (200 * a).toInt()); line.strokeWidth = 1.2f * d; c.drawLine(mid, h * 0.18f, mid, h * 0.66f, line)
+            stroke.color = faded(accent, (200 * a).toInt()); stroke.strokeWidth = 2f * d
+            c.drawCircle(holdX, holdY, (22f + 5f * sin(pulse * 3f)) * d, stroke)
+            txt.textSize = 10 * d; txt.letterSpacing = 0.2f; txt.color = faded(accent, (255 * a).toInt())
+            c.drawText(if (holdSide == 0) "SLIDE LEFT = LAPTOP   ·   RIGHT = MOBILE" else "RELEASE TO SPEAK", mid, h - 70 * d, txt)
+        }
+
+        private fun beginHoldMic() {
+            if (!downMic) return
+            if (!MicService.hasPermission(act)) {
+                act.requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 4411)
+                say("ALLOW THE MIC, THEN HOLD AGAIN"); downMic = false; return
+            }
+            holdOn = true; holdSide = 0
+            parent?.requestDisallowInterceptTouchEvent(true)
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            invalidate()
+        }
+
+        private fun moveHold(x: Float, y: Float) {
+            holdX = x; holdY = y
+            val dead = 36 * d
+            val side = if (x < width / 2f - dead) 1 else if (x > width / 2f + dead) 2 else 0
+            if (side != holdSide) { holdSide = side; if (side != 0) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) }
+            invalidate()
+        }
+
+        private fun endHold(commit: Boolean) {
+            val side = holdSide
+            holdOn = false; holdSide = 0; downMic = false
+            ui.removeCallbacks(holdRun)
+            if (commit && side != 0) holdMic(side)
+            invalidate()
+        }
+
+        private fun nearMic(x: Float, y: Float): Boolean =
+            if (burstOpen) burstPos(1, 1f).let { hypot(x - it[0], y - it[1]) < 38 * d } else hypot(x - cx, y - cy) < cr
 
         private fun drawStats(c: Canvas, a: Float) {
             if (a <= 0.02f) return
@@ -811,15 +914,27 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         }
 
         override fun onTouchEvent(e: MotionEvent): Boolean {
+            if (holdOn) {
+                when (e.actionMasked) {
+                    MotionEvent.ACTION_MOVE -> moveHold(e.x, e.y)
+                    MotionEvent.ACTION_UP -> endHold(true)
+                    MotionEvent.ACTION_CANCEL -> endHold(false)
+                }
+                return true
+            }
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     x0 = e.x; y0 = e.y; mode = 0; pos0 = pos
                     posAnim?.cancel()
                     vt?.recycle(); vt = VelocityTracker.obtain(); vt?.addMovement(e)
+                    downMic = nearMic(e.x, e.y); holdX = e.x; holdY = e.y
+                    ui.removeCallbacks(holdRun)
+                    if (downMic) ui.postDelayed(holdRun, 380L)
                 }
                 MotionEvent.ACTION_MOVE -> {
                     vt?.addMovement(e)
                     val dx = e.x - x0; val dy = e.y - y0
+                    if (downMic && hypot(dx, dy) > slop * 1.5f) { downMic = false; ui.removeCallbacks(holdRun) }
                     if (mode == 0) {
                         if (abs(dx) > slop && abs(dx) > abs(dy) && !burstOpen) mode = 1
                         else if (abs(dy) > slop * 2 && abs(dy) > abs(dx)) mode = 2
@@ -827,6 +942,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
                     if (mode == 1) { pos = pos0 - dx / step(); detent(); invalidate() }
                 }
                 MotionEvent.ACTION_UP -> {
+                    ui.removeCallbacks(holdRun); downMic = false
                     vt?.addMovement(e)
                     val dx = e.x - x0; val dy = e.y - y0
                     when (mode) {
@@ -844,7 +960,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
                     }
                     vt?.recycle(); vt = null
                 }
-                MotionEvent.ACTION_CANCEL -> { vt?.recycle(); vt = null; if (mode == 1) snapTo(Math.round(pos).toFloat()) }
+                MotionEvent.ACTION_CANCEL -> { ui.removeCallbacks(holdRun); downMic = false; vt?.recycle(); vt = null; if (mode == 1) snapTo(Math.round(pos).toFloat()) }
             }
             return true
         }

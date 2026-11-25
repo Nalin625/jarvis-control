@@ -92,7 +92,7 @@ private class SplashView(context: Context) : View(context) {
         canvas.drawColor(bg)
 
         // soft blue glow behind the core
-        fill.shader = RadialGradient(cx, cy, w * 0.6f,
+        fill.shader = RadialGradient(cx, cy, (w * 0.6f).coerceAtLeast(1f),
             intArrayOf(withAlpha(blue, 0.30f), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
         canvas.drawRect(0f, 0f, w, h, fill)
         fill.shader = null

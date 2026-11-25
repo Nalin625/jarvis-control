@@ -184,6 +184,11 @@
         </activity>
 
         <activity
+            android:name=".CameraZoomActivity"
+            android:exported="false"
+            android:label="Jarvis Camera" />
+
+        <activity
             android:name=".RemoteActivity"
             android:exported="false"
             android:label="Laptop remote" />
@@ -297,5 +302,10 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".NotesScanActivity"
+            android:exported="false"
+            android:label="Notes scan"
+            android:theme="@style/Theme.JarvisControl" />
     </application>
 </manifest>

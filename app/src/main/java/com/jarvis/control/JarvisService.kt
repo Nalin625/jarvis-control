@@ -20,6 +20,9 @@ class JarvisService : Service() {
 
         /** True while the control server is up (read by the Quick Settings tile). */
         @Volatile var running = false
+
+        /** The token the running control server checks. Pairing sends this, so the laptop always matches it. */
+        @Volatile var activeToken = ""
     }
 
     override fun onCreate() {
@@ -29,6 +32,7 @@ class JarvisService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val token = intent?.getStringExtra(ACTION_TOKEN_EXTRA) ?: ""
+        activeToken = token
 
         val notification = NotificationCompat.Builder(this, SERVICE_CHANNEL_ID)
             .setContentTitle("Jarvis Control")

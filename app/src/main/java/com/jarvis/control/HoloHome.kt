@@ -172,7 +172,9 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             Item("DRIVE", "cloud", null, false) { launchPkg("com.google.android.apps.docs", "DRIVE") },
             Item("TRANSLATE", "globe", null, false) { launchPkg("com.google.android.apps.translate", "TRANSLATE") }),
         "OPEN" to listOf(
-            Item("CAMERA", "camera", null, false) { PhoneTools.openCamera(act).uppercase() },
+            Item("CAMERA", "camera", null, false) { act.startActivity(Intent(act, CameraZoomActivity::class.java)); "CAMERA AI" },
+            Item("NOTES SCAN", "image", null, false) { act.startActivity(Intent(act, NotesScanActivity::class.java)); "NOTES SCAN" },
+            Item("SYSTEM CAM", "camera", null, false) { PhoneTools.openCamera(act).uppercase() },
             Item("CLOCK", "clock", null, false) { PhoneTools2.openClock(act).uppercase() },
             Item("TIMER", "timer", null, false) { PhoneTools2.oneMinuteTimer(act).uppercase() },
             Item("CALENDAR", "cal", null, false) { PhoneTools2.openCalendar(act).uppercase() },

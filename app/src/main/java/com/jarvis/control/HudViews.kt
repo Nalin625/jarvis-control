@@ -332,7 +332,7 @@ class HudBackgroundView @JvmOverloads constructor(ctx: Context, attrs: Attribute
         val bot = ContextCompat.getColor(context, R.color.bg_root2)
         val acc = ContextCompat.getColor(context, R.color.accent)
         bg.shader = LinearGradient(0f, 0f, 0f, h.toFloat(), top, bot, Shader.TileMode.CLAMP)
-        val r1 = w * 0.9f
+        val r1 = (w * 0.9f).coerceAtLeast(1f)
         glowA.shader = RadialGradient(w * 0.15f, h * 0.12f, r1, Color.argb(46, Color.red(acc), Color.green(acc), Color.blue(acc)), Color.argb(0, Color.red(acc), Color.green(acc), Color.blue(acc)), Shader.TileMode.CLAMP)
         glowB.shader = RadialGradient(w * 0.95f, h * 0.88f, r1, Color.argb(34, Color.red(acc), Color.green(acc), Color.blue(acc)), Color.argb(0, Color.red(acc), Color.green(acc), Color.blue(acc)), Shader.TileMode.CLAMP)
 

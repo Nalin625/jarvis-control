@@ -44,7 +44,7 @@ object ShotBridge {
     private val slot = Semaphore(1)
     @Volatile private var waiting: CompletableFuture<ShotResult>? = null
 
-    fun take(ctx: Context, facing: String, maxSide: Int, quality: Int): ShotResult {
+    fun take(ctx: Context, facing: String, maxSide: Int, quality: Int, look: Boolean = false): ShotResult {
         if (!slot.tryAcquire(1, TimeUnit.SECONDS)) {
             return ShotResult(null, 0, 0, "", "a photo is already being taken, try again in a moment")
         }
@@ -55,6 +55,7 @@ object ShotBridge {
                 .putExtra(ShotService.EXTRA_FACING, facing)
                 .putExtra(ShotService.EXTRA_MAX_SIDE, maxSide)
                 .putExtra(ShotService.EXTRA_QUALITY, quality)
+                .putExtra(ShotService.EXTRA_LOOK, look)
             ContextCompat.startForegroundService(ctx, intent)
             return try {
                 future.get(16, TimeUnit.SECONDS)
@@ -86,6 +87,7 @@ class ShotService : Service() {
         const val EXTRA_FACING = "facing"
         const val EXTRA_MAX_SIDE = "max_side"
         const val EXTRA_QUALITY = "quality"
+        const val EXTRA_LOOK = "look"
         private const val CHANNEL_RUN = "jarvis_camera_run"
         private const val CHANNEL_DONE = "jarvis_camera_done"
         private const val NOTIF_RUN = 7701
@@ -99,6 +101,7 @@ class ShotService : Service() {
     private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
     @Volatile private var finished = false
+    @Volatile private var look = false          // Jarvis eyes: a quick look, nothing saved, no 'took a photo' notice
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -111,7 +114,7 @@ class ShotService : Service() {
         val notice = NotificationCompat.Builder(this, CHANNEL_RUN)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentTitle("Jarvis")
-            .setContentText("Taking a photo for the laptop")
+            .setContentText(if (intent?.getBooleanExtra(EXTRA_LOOK, false) == true) "Jarvis is looking" else "Taking a photo for the laptop")
             .setOngoing(true)
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
@@ -123,6 +126,7 @@ class ShotService : Service() {
         val facing = intent?.getStringExtra(EXTRA_FACING) ?: "back"
         val maxSide = intent?.getIntExtra(EXTRA_MAX_SIDE, 1600) ?: 1600
         val quality = intent?.getIntExtra(EXTRA_QUALITY, 88) ?: 88
+        look = intent?.getBooleanExtra(EXTRA_LOOK, false) == true
 
         if (thread == null) {
             val ht = HandlerThread("JarvisShot")
@@ -253,7 +257,7 @@ class ShotService : Service() {
 
     private fun onPhoto(bytes: ByteArray, w: Int, h: Int) {
         if (finished) return
-        val saved = try { saveCopy(bytes) } catch (e: Exception) { "" }
+        val saved = if (look) "" else try { saveCopy(bytes) } catch (e: Exception) { "" }
         finish(bytes, w, h, saved, null)
     }
 
@@ -288,7 +292,7 @@ class ShotService : Service() {
         if (finished) return
         finished = true
         ShotBridge.deliver(ShotResult(jpeg, w, h, saved, error))
-        if (jpeg != null) {
+        if (jpeg != null && !look) {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val note = NotificationCompat.Builder(this, CHANNEL_DONE)
                 .setSmallIcon(android.R.drawable.ic_menu_camera)

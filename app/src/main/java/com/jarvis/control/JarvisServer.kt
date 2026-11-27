@@ -361,7 +361,7 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
         ) {
             return json(JSONObject().put("error", "Camera permission not granted — open the app once and allow it."))
         }
-        val shot = ShotBridge.take(context, facing, maxSide, quality)
+        val shot = ShotBridge.take(context, facing, maxSide, quality, body.optBoolean("look", false))
         val err = shot.error
         if (err != null || shot.jpeg == null) {
             return json(JSONObject().put("error", err ?: "no picture was taken"))

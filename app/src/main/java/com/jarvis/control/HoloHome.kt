@@ -110,6 +110,8 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
     private val dial = listOf(
         Item("PHONE DECK", "phone", null), Item("NOTIFICATIONS", "bell", null), Item("LAPTOP DECK", "laptop", null),
         Item("PASTE TO LAPTOP", "paste", "PASTE TO LAPTOP"), Item("PAIR", "link", "PAIR"),
+        Item("CAMERA AI", "camera", null, false) { act.startActivity(Intent(act, CameraZoomActivity::class.java)); "CAMERA AI" },
+        Item("NOTES SCAN", "image", null, false) { act.startActivity(Intent(act, NotesScanActivity::class.java)); "NOTES SCAN" },
         Item("ARCADE", "game", null), Item("THEME", "theme", "THEME"), Item("SETUP", "sliders", "SETUP")
     )
 

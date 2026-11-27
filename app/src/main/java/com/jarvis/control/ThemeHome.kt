@@ -786,9 +786,10 @@ class IntroView(ctx: Context) : View(ctx) {
     private val sub = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C_CYAN; textAlign = Paint.Align.CENTER; typeface = Typeface.DEFAULT_BOLD; textSize = 13f * d; letterSpacing = 0.3f }
     private val hint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C_DIM; textAlign = Paint.Align.CENTER; textSize = 11f * d }
     private val anim = ValueAnimator.ofFloat(0f, 1f).apply {
-        duration = 3200L
+        duration = 4200L
         interpolator = LinearInterpolator()
-        addUpdateListener { t = it.animatedValue as Float; angle = t * 540f; alpha = 1f - seg(0.9f, 1f); invalidate() }
+        // fades in softly (no sudden black pop) and leaves slowly instead of vanishing in the last moments
+        addUpdateListener { t = it.animatedValue as Float; angle = t * 540f; alpha = sm(seg(0f, 0.08f)) * (1f - sm(seg(0.84f, 1f))); invalidate() }
         addListener(object : AnimatorListenerAdapter() {
             override fun onAnimationEnd(animation: Animator) { finish() }
         })
@@ -809,6 +810,7 @@ class IntroView(ctx: Context) : View(ctx) {
     }
 
     private fun seg(a: Float, b: Float): Float = ((t - a) / (b - a)).coerceIn(0f, 1f)
+    private fun sm(x: Float): Float = x * x * (3f - 2f * x)
 
     override fun onDraw(c: Canvas) {
         super.onDraw(c)

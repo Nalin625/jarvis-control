@@ -288,7 +288,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         deck.visibility = View.VISIBLE
         if (phone) deck.prepare("PHONE DECK", phoneGroups) else deck.prepare("LAPTOP DECK", laptopGroups)
         deck.translationY = -root.height.toFloat()
-        deck.animate().translationY(0f).setDuration(320).setInterpolator(DecelerateInterpolator(1.6f)).start()
+        deck.animate().translationY(0f).setDuration(440).setInterpolator(DecelerateInterpolator(1.6f)).start()
         updateBack()
     }
 
@@ -297,7 +297,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         inboxOpen = true
         inbox.visibility = View.VISIBLE
         inbox.translationY = root.height.toFloat()
-        inbox.animate().translationY(0f).setDuration(300).setInterpolator(DecelerateInterpolator(1.6f)).start()
+        inbox.animate().translationY(0f).setDuration(420).setInterpolator(DecelerateInterpolator(1.6f)).start()
         inbox.load()
         updateBack()
     }
@@ -305,7 +305,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
     fun closeInbox() {
         if (!inboxOpen) return
         inboxOpen = false
-        inbox.animate().translationY(root.height.toFloat()).setDuration(240).withEndAction {
+        inbox.animate().translationY(root.height.toFloat()).setDuration(330).withEndAction {
             if (!inboxOpen) inbox.visibility = View.GONE
         }.start()
         updateBack()
@@ -314,7 +314,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
     fun closeDeck() {
         if (!deckOpen) return
         deckOpen = false
-        deck.animate().translationY(-root.height.toFloat()).setDuration(240).withEndAction {
+        deck.animate().translationY(-root.height.toFloat()).setDuration(330).withEndAction {
             if (!deckOpen) deck.visibility = View.GONE
         }.start()
         updateBack()
@@ -895,7 +895,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         private fun animateBurst(to: Float) {
             burstAnim?.cancel()
             burstAnim = ValueAnimator.ofFloat(burstP, to).apply {
-                duration = if (to > 0f) 420 else 220
+                duration = if (to > 0f) 560 else 320
                 interpolator = if (to > 0f) OvershootInterpolator(1.6f) else DecelerateInterpolator()
                 addUpdateListener { burstP = (it.animatedValue as Float).coerceAtLeast(0f); invalidate() }
                 start()
@@ -906,7 +906,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
         private fun snapTo(target: Float) {
             posAnim?.cancel()
             posAnim = ValueAnimator.ofFloat(pos, target).apply {
-                duration = 340; interpolator = DecelerateInterpolator(1.8f)
+                duration = 440; interpolator = DecelerateInterpolator(1.8f)
                 addUpdateListener { pos = it.animatedValue as Float; detent(); invalidate() }
                 start()
             }
@@ -1135,7 +1135,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             val t = target.coerceIn(0f, (items().size - 1).toFloat())
             posAnim?.cancel()
             posAnim = ValueAnimator.ofFloat(pos, t).apply {
-                duration = 360; interpolator = DecelerateInterpolator(1.8f)
+                duration = 460; interpolator = DecelerateInterpolator(1.8f)
                 addUpdateListener { pos = it.animatedValue as Float; detent(); invalidate() }
                 start()
             }

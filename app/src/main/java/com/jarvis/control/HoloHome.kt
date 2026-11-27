@@ -177,6 +177,7 @@ class HoloHome private constructor(private val act: Activity, private val pageHo
             Item("CAMERA", "camera", null, false) { act.startActivity(Intent(act, CameraZoomActivity::class.java)); "CAMERA AI" },
             Item("NOTES SCAN", "image", null, false) { act.startActivity(Intent(act, NotesScanActivity::class.java)); "NOTES SCAN" },
             Item("SYSTEM CAM", "camera", null, false) { PhoneTools.openCamera(act).uppercase() },
+            Item("INTEL", "eye", null, false) { act.startActivity(Intent(act, com.jarvis.control.intel.IntelActivity::class.java)); "INTEL" },
             Item("CLOCK", "clock", null, false) { PhoneTools2.openClock(act).uppercase() },
             Item("TIMER", "timer", null, false) { PhoneTools2.oneMinuteTimer(act).uppercase() },
             Item("CALENDAR", "cal", null, false) { PhoneTools2.openCalendar(act).uppercase() },

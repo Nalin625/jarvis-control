@@ -303,6 +303,11 @@
             </intent-filter>
         </activity>
         <activity
+            android:name=".intel.IntelActivity"
+            android:exported="false"
+            android:label="Intelligence"
+            android:theme="@style/Theme.JarvisControl" />
+        <activity
             android:name=".NotesScanActivity"
             android:exported="false"
             android:label="Notes scan"

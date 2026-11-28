@@ -47,6 +47,7 @@ class TrackerActivity : Activity() {
 
     private val importCode = 77
     private val importShotsCode = 78
+    private val importVideoCode = 79
 
     private fun px(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun fmt(ts: Long) = if (ts <= 0L) "never" else TrackerLogic.formatDateTime(ts)
@@ -118,6 +119,9 @@ class TrackerActivity : Activity() {
         add(btn("Import a TXT or CSV list") { pickFile() }, 6)
         add(btn("Import from screenshots (on this phone)") {
             startActivityForResult(Intent(this, ScreenshotImportActivity::class.java).putExtra(ScreenshotImportActivity.EXTRA_PROFILE, p.id), importShotsCode)
+        }, 6)
+        add(btn("Import from video (on this phone)") {
+            startActivityForResult(Intent(this, VideoImportActivity::class.java).putExtra(VideoImportActivity.EXTRA_PROFILE, p.id), importVideoCode)
         }, 6)
         add(text("Compare", TACC, 13f, bold = true), 16)
         add(btn("Compare two list snapshots") { compareStart(p) }, 6)
@@ -249,6 +253,10 @@ class TrackerActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == importShotsCode) {
             if (resultCode == RESULT_OK) { render(); status.text = "Screenshot list saved." }
+            return
+        }
+        if (requestCode == importVideoCode) {
+            if (resultCode == RESULT_OK) { render(); status.text = "Video list saved." }
             return
         }
         if (requestCode != importCode || resultCode != RESULT_OK) return

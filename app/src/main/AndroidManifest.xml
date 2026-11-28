@@ -328,6 +328,11 @@
             android:label="Import from screenshots"
             android:theme="@style/Theme.JarvisControl" />
         <activity
+            android:name=".instagramtracker.VideoImportActivity"
+            android:exported="false"
+            android:label="Import from video"
+            android:theme="@style/Theme.JarvisControl" />
+        <activity
             android:name=".NotesScanActivity"
             android:exported="false"
             android:label="Notes scan"

@@ -318,6 +318,11 @@
             android:label="Investigation workspace"
             android:theme="@style/Theme.JarvisControl" />
         <activity
+            android:name=".instagramtracker.TrackerActivity"
+            android:exported="false"
+            android:label="Instagram Observation Tracker"
+            android:theme="@style/Theme.JarvisControl" />
+        <activity
             android:name=".NotesScanActivity"
             android:exported="false"
             android:label="Notes scan"

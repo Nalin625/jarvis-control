@@ -79,6 +79,8 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
                 "/motion/status" -> handleMotionStatus()
                 "/motion/stop" -> handleMotionStop()
                 "/intel/recent" -> handleIntelRecent()
+                "/osint/run" -> handleOsintRun(session)
+                "/osint/projects" -> handleOsintProjects()
                 "/insta/status" -> handleInstaStatus()
                 "/insta/shutter" -> handleInstaShutter()
                 "/insta/tap" -> handleInstaTap(session)
@@ -390,6 +392,29 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
             arr.put(JSONObject().put("title", row.title).put("ts", row.ts).put("text", text))
         }
         return json(JSONObject().put("ok", true).put("items", arr))
+    }
+
+    /** Runs one OSINT check for the laptop: body {kind, input, project}. Returns the report text and where it was saved. */
+    private fun handleOsintRun(session: IHTTPSession): Response {
+        val body = readBody(session)
+        val kind = body.optString("kind")
+        val input = body.optString("input")
+        if (kind.isBlank() || input.isBlank()) return json(JSONObject().put("error", "kind and input are needed"))
+        return try {
+            val r = com.jarvis.control.intel.OsintRunner.run(context, kind, input)
+            val saved = com.jarvis.control.intel.OsintRunner.save(context, body.optString("project"), r)
+            json(JSONObject().put("ok", true).put("title", r.title).put("text", r.toText().take(6000))
+                .put("saved_to", saved ?: JSONObject.NULL))
+        } catch (e: Throwable) {
+            json(JSONObject().put("error", "the check stopped (${e.javaClass.simpleName}); nothing was saved"))
+        }
+    }
+
+    private fun handleOsintProjects(): Response {
+        val store = com.jarvis.control.intel.SqlWorkspaceStore.get(context)
+        val arr = JSONArray()
+        for (p in store.projects()) arr.put(JSONObject().put("name", p.name).put("items", store.items(p.id).size))
+        return json(JSONObject().put("ok", true).put("projects", arr))
     }
 
     private fun handleCameraShot(session: IHTTPSession): Response {

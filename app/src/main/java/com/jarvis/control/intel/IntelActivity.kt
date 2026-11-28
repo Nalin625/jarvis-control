@@ -54,7 +54,8 @@ class IntelActivity : Activity() {
             Act("Investigation workspace (projects, graph, export)", ui = true, exec = { startActivity(Intent(this, OsintActivity::class.java)); null })),
         "SOCIAL" to listOf(
             Act("Set up my Instagram", ui = true, exec = { showSocialSetup(); null }),
-            Act("My account analytics", exec = { SocialTools.report(this) })),
+            Act("My account analytics", exec = { SocialTools.report(this) }),
+            Act("Instagram Observation Tracker (manual)", ui = true, exec = { startActivity(Intent(this, com.jarvis.control.instagramtracker.TrackerActivity::class.java)); null })),
         "WEBSITE" to listOf(
             Act("Full website scan", "a website", exec = { WebTools.full(this, it) }),
             Act("Availability & redirects", "a website", exec = { WebTools.availability(it) }),

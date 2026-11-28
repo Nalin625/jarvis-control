@@ -323,6 +323,11 @@
             android:label="Instagram Observation Tracker"
             android:theme="@style/Theme.JarvisControl" />
         <activity
+            android:name=".instagramtracker.ScreenshotImportActivity"
+            android:exported="false"
+            android:label="Import from screenshots"
+            android:theme="@style/Theme.JarvisControl" />
+        <activity
             android:name=".NotesScanActivity"
             android:exported="false"
             android:label="Notes scan"

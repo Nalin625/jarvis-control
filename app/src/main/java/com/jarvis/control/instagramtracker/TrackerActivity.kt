@@ -46,6 +46,7 @@ class TrackerActivity : Activity() {
     private var cmpSearch: EditText? = null
 
     private val importCode = 77
+    private val importShotsCode = 78
 
     private fun px(v: Int) = (v * resources.displayMetrics.density).toInt()
     private fun fmt(ts: Long) = if (ts <= 0L) "never" else TrackerLogic.formatDateTime(ts)
@@ -115,6 +116,9 @@ class TrackerActivity : Activity() {
         add(btn("Enter follower and following counts") { countForm(p) }, 6)
         add(btn("Paste a username list") { listForm(p, null, SRC_MANUAL) }, 6)
         add(btn("Import a TXT or CSV list") { pickFile() }, 6)
+        add(btn("Import from screenshots (on this phone)") {
+            startActivityForResult(Intent(this, ScreenshotImportActivity::class.java).putExtra(ScreenshotImportActivity.EXTRA_PROFILE, p.id), importShotsCode)
+        }, 6)
         add(text("Compare", TACC, 13f, bold = true), 16)
         add(btn("Compare two list snapshots") { compareStart(p) }, 6)
         add(btn("Count history") { showCounts(p) }, 6)
@@ -243,6 +247,10 @@ class TrackerActivity : Activity() {
     @Deprecated("Activity result API kept for this simple file pick")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == importShotsCode) {
+            if (resultCode == RESULT_OK) { render(); status.text = "Screenshot list saved." }
+            return
+        }
         if (requestCode != importCode || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
         val p = store.profile(profileId) ?: return

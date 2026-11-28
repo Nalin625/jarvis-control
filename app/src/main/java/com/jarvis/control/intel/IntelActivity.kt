@@ -50,7 +50,8 @@ class IntelActivity : Activity() {
             Act("Domain OSINT (all public records)", "a domain", exec = { OsintTools.domainOsint(this, it) }),
             Act("GitHub repositories", "a topic or project name", exec = { OsintTools.githubRepos(it) }),
             Act("GitHub user check", "a GitHub username", exec = { OsintTools.githubHandle(it) }),
-            Act("Public web mentions", "a name or term", exec = { OsintTools.mentions(it) })),
+            Act("Public web mentions", "a name or term", exec = { OsintTools.mentions(it) }),
+            Act("Investigation workspace (projects, graph, export)", ui = true, exec = { startActivity(Intent(this, OsintActivity::class.java)); null })),
         "SOCIAL" to listOf(
             Act("Set up my Instagram", ui = true, exec = { showSocialSetup(); null }),
             Act("My account analytics", exec = { SocialTools.report(this) })),

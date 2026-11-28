@@ -48,7 +48,7 @@ object IpTools {
             return rep
         }
         val src = "https://ipwho.is/$ip"
-        val g = Net.get(src, timeoutMs = 8000)
+        val g = Net.get(src, timeoutMs = 8000, cacheSec = 3600)
         val j = g.json()
         if (j == null || !j.optBoolean("success", false)) {
             rep.na("Geolocation / ISP / ASN", j?.optString("message")?.takeIf { it.isNotBlank() } ?: g.why(), src)
@@ -65,7 +65,7 @@ object IpTools {
             rep.obs("Address type", j.optString("type", "?"), src)
         }
         // official registration record (RDAP)
-        val rd = Net.get("https://rdap.org/ip/$ip", timeoutMs = 9000)
+        val rd = Net.get("https://rdap.org/ip/$ip", timeoutMs = 9000, cacheSec = 3600)
         rd.json()?.let { o ->
             rep.ver("Registered network", listOf(o.optString("name"), o.optString("handle")).filter { it.isNotBlank() }.joinToString(" / ") + (o.optString("country").takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""), "https://rdap.org/ip/$ip")
             val start = o.optString("startAddress"); val end = o.optString("endAddress")
@@ -83,7 +83,7 @@ object IpTools {
         } else rep.na("Spam-report database", "service did not answer", "https://www.stopforumspam.com")
         val tor = torExit(ctx, ip)
         if (tor != null) rep.obs("Tor exit node", if (tor) "yes - this is a Tor exit address" else "no", TOR_LIST) else rep.na("Tor exit node", "list could not be loaded", TOR_LIST)
-        rep.summary = "Location is an estimate from a public database. Reputation comes from free public lists only; 'not listed' is not a guarantee of safety."
+        rep.summary = "Location is an estimate from a public database. Reputation comes from free public lists only; 'not listed' is not a guarantee of safety. Answers for the same IP within an hour are reused, so they can be up to an hour old."
         return rep
     }
 
@@ -92,7 +92,7 @@ object IpTools {
     fun reverseDns(ip: String): String? {
         val a = arpa(ip)
         if (a.isNotEmpty()) {
-            val r = Net.get("https://dns.google/resolve?name=$a&type=PTR", timeoutMs = 6000).json()
+            val r = Net.get("https://dns.google/resolve?name=$a&type=PTR", timeoutMs = 6000, cacheSec = 3600).json()
             val ans = r?.optJSONArray("Answer")
             if (ans != null && ans.length() > 0) return ans.getJSONObject(0).optString("data").trimEnd('.')
         }
@@ -119,7 +119,7 @@ object IpTools {
 
 /** DNS, RDAP, certificates, headers, availability, technologies, subdomains and change tracking for a website. */
 object WebTools {
-    private fun doh(name: String, type: String): JSONObject? = Net.get("https://dns.google/resolve?name=${Net.enc(name)}&type=$type", timeoutMs = 7000).json()
+    private fun doh(name: String, type: String): JSONObject? = Net.get("https://dns.google/resolve?name=${Net.enc(name)}&type=$type", timeoutMs = 7000, cacheSec = 3600).json()
 
     fun dnsReport(domain: String): Report {
         val d = Fmt.domainOf(domain)
@@ -140,6 +140,7 @@ object WebTools {
         if (txt != null) for (i in 0 until txt.length()) if (txt.getJSONObject(i).optString("data").contains("v=spf1")) spf = true
         rep.obs("SPF (anti-spoofing) record", if (spf) "present" else "missing - others could forge mail from this domain", "https://dns.google/resolve?name=$d&type=TXT")
         val dm = doh("_dmarc.$d", "TXT")?.optJSONArray("Answer")
+        rep.summary = "Answers for the same name within an hour are reused, so they can be up to an hour old."
         rep.obs("DMARC policy", if (dm != null && dm.length() > 0) dm.getJSONObject(0).optString("data").take(160) else "missing", "https://dns.google/resolve?name=_dmarc.$d&type=TXT")
         return rep
     }
@@ -151,7 +152,7 @@ object WebTools {
         val d = Fmt.domainOf(domain)
         val rep = Report("Registration (RDAP) - $d", "rdap", d)
         val src = "https://rdap.org/domain/$d"
-        val r = Net.get(src, timeoutMs = 10000)
+        val r = Net.get(src, timeoutMs = 10000, cacheSec = 3600)
         val j = r.json()
         if (j == null) { rep.na("RDAP record", r.why(), src); return rep }
         rep.ver("Domain", j.optString("ldhName", d), src)
@@ -169,7 +170,7 @@ object WebTools {
                 if (fn.isNotBlank()) rep.ver("Registrar", fn, src)
             }
         }
-        rep.summary = "Registrant personal details are not displayed (most registries redact them, and this tool does not seek them)."
+        rep.summary = "Registrant personal details are not displayed (most registries redact them, and this tool does not seek them). Answers for the same domain within an hour are reused."
         domainAgeDays(j)?.let { rep.est("Domain age", "$it days", src) }
         return rep
     }

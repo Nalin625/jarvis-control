@@ -210,6 +210,11 @@
             android:label="Jarvis Gestures" />
 
         <service
+            android:name=".MotionService"
+            android:exported="false"
+            android:foregroundServiceType="camera" />
+
+        <service
             android:name=".GestureService"
             android:exported="false"
             android:foregroundServiceType="camera" />
@@ -306,6 +311,11 @@
             android:name=".intel.IntelActivity"
             android:exported="false"
             android:label="Intelligence"
+            android:theme="@style/Theme.JarvisControl" />
+        <activity
+            android:name=".intel.OsintActivity"
+            android:exported="false"
+            android:label="Investigation workspace"
             android:theme="@style/Theme.JarvisControl" />
         <activity
             android:name=".NotesScanActivity"

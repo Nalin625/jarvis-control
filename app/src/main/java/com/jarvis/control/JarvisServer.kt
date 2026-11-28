@@ -76,6 +76,9 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
                 "/volume" -> handleVolume(session)
                 "/torch" -> handleTorch(session)
                 "/camera/shot" -> handleCameraShot(session)
+                "/motion/status" -> handleMotionStatus()
+                "/motion/stop" -> handleMotionStop()
+                "/intel/recent" -> handleIntelRecent()
                 "/insta/status" -> handleInstaStatus()
                 "/insta/shutter" -> handleInstaShutter()
                 "/insta/tap" -> handleInstaTap(session)
@@ -351,6 +354,44 @@ class JarvisServer(private val context: Context, port: Int) : NanoHTTPD(port) {
      * ShotService (a camera foreground service) and returned as base64 JPEG. The phone keeps a copy in
      * Pictures/Jarvis and posts a notification, so a photo is never taken without the owner seeing it.
      */
+    /** Motion watch: starts the watch if needed and says whether anything moved in the last 8 seconds. */
+    private fun handleMotionStatus(): Response {
+        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) return json(JSONObject().put("error", "Camera permission not granted - open the app once and allow it."))
+        val wasRunning = com.jarvis.control.MotionBridge.running
+        com.jarvis.control.MotionBridge.lastAskAt = android.os.SystemClock.uptimeMillis()
+        if (!wasRunning) com.jarvis.control.MotionService.start(context)
+        val now = android.os.SystemClock.uptimeMillis()
+        val last = com.jarvis.control.MotionBridge.lastMotionAt
+        val moving = last > 0 && now - last < 8000L
+        return json(
+            JSONObject()
+                .put("ok", true)
+                .put("running", com.jarvis.control.MotionBridge.running)
+                .put("starting", !wasRunning)
+                .put("moving", moving)
+                .put("score", Math.round(com.jarvis.control.MotionBridge.score * 10) / 10.0)
+        )
+    }
+
+    private fun handleMotionStop(): Response {
+        com.jarvis.control.MotionBridge.lastAskAt = 0L
+        com.jarvis.control.MotionService.stop(context)
+        return json(JSONObject().put("ok", true))
+    }
+
+    /** The latest Intelligence reports saved on this phone, as plain text, for the laptop to show. */
+    private fun handleIntelRecent(): Response {
+        val db = com.jarvis.control.intel.IntelDb.get(context)
+        val arr = JSONArray()
+        for (row in db.history(5)) {
+            val text = db.report(row.id)?.toText()?.take(1500) ?: ""
+            arr.put(JSONObject().put("title", row.title).put("ts", row.ts).put("text", text))
+        }
+        return json(JSONObject().put("ok", true).put("items", arr))
+    }
+
     private fun handleCameraShot(session: IHTTPSession): Response {
         val body = readBody(session)
         val facing = if (body.optString("facing", "back") == "front") "front" else "back"

@@ -125,7 +125,24 @@ class NetResult(val code: Int, val body: String, val headers: Map<String, List<S
 object Net {
     private const val UA = "Mozilla/5.0 (Linux; Android) JarvisIntel/1.0"
 
-    fun get(url: String, headers: Map<String, String> = emptyMap(), timeoutMs: Int = 8000, maxBytes: Int = 600_000, follow: Boolean = true, method: String = "GET"): NetResult {
+    /** Answers for the same public address are reused for [cacheSec] seconds (only successful, unauthenticated GETs). */
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, NetResult>>()
+
+    fun get(url: String, headers: Map<String, String> = emptyMap(), timeoutMs: Int = 8000, maxBytes: Int = 600_000, follow: Boolean = true, method: String = "GET", cacheSec: Int = 0): NetResult {
+        val cacheable = cacheSec > 0 && headers.isEmpty() && method == "GET"
+        if (cacheable) {
+            val hit = cache[url]
+            if (hit != null && System.currentTimeMillis() - hit.first < cacheSec * 1000L) return hit.second
+        }
+        val r = fetch(url, headers, timeoutMs, maxBytes, follow, method)
+        if (cacheable && r.ok) {
+            if (cache.size > 300) cache.clear()
+            cache[url] = System.currentTimeMillis() to r
+        }
+        return r
+    }
+
+    private fun fetch(url: String, headers: Map<String, String>, timeoutMs: Int, maxBytes: Int, follow: Boolean, method: String): NetResult {
         var cur = url
         val t0 = System.currentTimeMillis()
         var hops = 0
